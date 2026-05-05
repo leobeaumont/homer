@@ -58,7 +58,7 @@ def parse_pdfs(
     #)
     
     text_splitter = RecursiveCharacterTextSplitter(
-      chunk_size=4000,
+      chunk_size=1024,
       chunk_overlap=200,
       length_function=len,
       is_separator_regex=False
