@@ -1,9 +1,7 @@
 import streamlit as st
-import ollama
+import json
 
-from core.configuration import load_config
-from constant import OLLAMA_CLIENT
-
+from core.configuration import Configuration, load_config, CONFIG_PATH
 
 ############################## Initialization ##############################
 
@@ -13,22 +11,10 @@ st.set_page_config(
     layout="centered"
   )
 
-# Default values of the models for server/local execution and classic/reasoning
-DEFAULT_MODELS = {
-  "server_reasoning": "qwen3:30b-a3b",
-  "server_standard": "gemma3:4b-it-qat", 
-  "local_reasoning": "qwen3:0.6b",
-  "local_standard": "gemma3:1b"
-}
-
-# Ensure session variables are instantiated
+# Ensure configuration is loaded
 
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
-if "ollama_host" not in st.session_state:
-  st.session_state.ollama_host = OLLAMA_CLIENT
-if "models" not in st.session_state:
-  st.session_state.models = DEFAULT_MODELS.copy()
 
 
 ######################################## Form ########################################
@@ -42,47 +28,44 @@ config = st.session_state.baseConfig
 # Create form for configuration
 with st.form("config_form"):
   # Ollama host
-  ollama_host = st.text_input(
-    "Ollama Host URL",
-    value=st.session_state.ollama_host,
-    help="The host URL for the Ollama service. Must be a valid URL."
+  ollama_local = st.text_input(
+    "local Ollama URL",
+    value=st.session_state.baseConfig.ollama_local,
+    help="The URL for the local Ollama service. Usually http://localhost:11434."
+  )
+
+  ollama_distant = st.text_input(
+    "distant Ollama URL",
+    value=st.session_state.baseConfig.ollama_distant,
+    help="The URL for the distant Ollama service. Must be a valid URL."
   )
   
-  # Test connection button (outside form to avoid form submission)
-  col1, col2 = st.columns([3, 1])
-  with col1:
-    if ollama_host:
-      if ollama_host.startswith(('http://', 'https://')):
-        st.success("Valid URL format")
-      else:
-        st.warning("URL should start with http:// or https://")  
-
   st.subheader("Model Configuration")
   
   # Model configurations
   local_reasoning_model = st.text_input(
     "Local Reasoning Model",
-    value=st.session_state.models["local_reasoning"],
+    value=st.session_state.baseConfig.local_reasoning,
     help="Reasoning model for local execution"
   )
   local_standard_model = st.text_input(
     "Local Standard Model",
-    value=st.session_state.models["local_standard"],
+    value=st.session_state.baseConfig.local_standard,
     help="Standard model for local execution"
   )
   server_reasoning_model = st.text_input(
     "Server Reasoning Model",
-    value=st.session_state.models["server_reasoning"],
+    value=st.session_state.baseConfig.server_reasoning,
     help="Reasoning model for server execution"
   )
   server_standard_model = st.text_input(
     "Server Standard Model",
-    value=st.session_state.models["server_standard"],
+    value=st.session_state.baseConfig.server_standard,
     help="Reasoning model for server execution"
   )
   server_vision_model = st.text_input(
     "Vision model",
-    value=config.vision_model,
+    value=st.session_state.baseConfig.vision_model,
     help="Vision model used to parse pdf, only if connected to server ollama client"
   )
   
@@ -91,15 +74,37 @@ with st.form("config_form"):
 
 # Handle form submissions
 if submitted:
-  # Update configuration
-  st.session_state.models = {
-  "server_reasoning": server_reasoning_model,
-  "server_standard": server_standard_model,
-  "local_reasoning": local_reasoning_model,
-  "local_standard": local_standard_model,      
-  }    
-  st.session_state.ollama_host = ollama_host
-  st.session_state.baseConfig.vision_model = server_vision_model
+  # Validate URLs
+  valid = True
+  if ollama_local and not ollama_local.startswith(('http://', 'https://')):
+    st.error("Local Ollama URL should start with http:// or https://")
+    valid = False
+  if ollama_distant and not ollama_distant.startswith(('http://', 'https://')):
+    st.error("Distant Ollama URL should start with http:// or https://")
+    valid = False
+  
+  if valid:
+    # Update configuration
+    config = Configuration(
+      number_of_parts = st.session_state.baseConfig.number_of_parts,
+      writing_style = st.session_state.baseConfig.writing_style,
+      number_of_documents = st.session_state.baseConfig.number_of_documents,
+      ollama_host = st.session_state.baseConfig.ollama_host,
+      ollama_local = ollama_local,
+      ollama_distant = ollama_distant,
+      ocr = st.session_state.baseConfig.ocr,
+      embedding_model = st.session_state.baseConfig.embedding_model,
+      local_reasoning = local_reasoning_model,
+      local_standard = local_standard_model,
+      server_reasoning = server_reasoning_model,
+      server_standard = server_standard_model,
+      vision_model = server_vision_model
+    )
+    
+    with open(CONFIG_PATH, "w") as f:
+      json.dump(config.asdict(), f, indent=2)
 
-  st.success("Configuration saved successfully!")
-  st.rerun()
+    st.session_state.baseConfig = load_config()
+
+    st.toast("Configuration saved successfully!")
+    st.rerun()

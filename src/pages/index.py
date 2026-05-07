@@ -6,7 +6,7 @@ from pathlib import Path
 from core.configuration import load_config
 from core.agents import IndexAgent
 from core.retrieval import delete_documents, get_existing_documents
-from constant import UPLOAD_DIR, OLLAMA_LOCALHOST
+from constant import UPLOAD_DIR
 from core.retrieval import get_existing_documents
 from pages.utils import is_ollama_client_available, is_connected
 
@@ -26,9 +26,6 @@ if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
 if "indexAgent" not in st.session_state:
   st.session_state.indexAgent = IndexAgent()
-if "ollama_host" not in st.session_state:
-  from constant import OLLAMA_CLIENT
-  st.session_state.ollama_host = OLLAMA_CLIENT
 
 st.markdown("# Documents")
 
@@ -94,7 +91,7 @@ def _process_files(uploaded_files):
 ############################## Sidebar ##############################
 
 
-conn = is_ollama_client_available(st.session_state.ollama_host)
+conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
 
 connectionButton = st.sidebar.toggle(
   label = "Server execution",
@@ -102,14 +99,16 @@ connectionButton = st.sidebar.toggle(
   key="indexConnectionButton",
 )
 
+# Configure server host based on connection preference
 if connectionButton:
+  conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
   if conn:
-    st.session_state.baseConfig.ollama_host=st.session_state.ollama_host
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_distant
   else:
-    st.sidebar.warning(f"Could not connect to {st.session_state.ollama_host}")
-    st.session_state.baseConfig.ollama_host=OLLAMA_LOCALHOST
+    st.sidebar.warning(f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local")
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 else:
-  st.session_state.baseConfig.ollama_host=OLLAMA_LOCALHOST
+  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 
 st.sidebar.write(f"Connected to: {st.session_state.baseConfig.ollama_host}")
 

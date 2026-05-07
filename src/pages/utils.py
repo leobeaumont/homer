@@ -27,12 +27,11 @@ def is_ollama_client_available(url: str) -> bool:
 
 
 from streamlit.runtime.state.session_state_proxy import SessionStateProxy
-from constant import OLLAMA_CLIENT
 
 def is_connected(session_state: SessionStateProxy) -> bool:
   if "baseConfig" not in session_state:
     raise Exception("config not loaded in the session state")
-  elif session_state.baseConfig.ollama_host == OLLAMA_CLIENT:
+  elif session_state.baseConfig.ollama_host == session_state.baseConfig.ollama_distant:
     return True
   return False
 

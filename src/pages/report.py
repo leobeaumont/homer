@@ -7,16 +7,16 @@ format.
 
 
 import streamlit as st
+import json
 
-from typing import Literal
 from pathlib import Path
 from datetime import datetime
 
 from core.agents import ReportAgent
-from core.configuration import load_config
+from core.configuration import load_config, Configuration, CONFIG_PATH
 from utils.converter import dict_to_pdf
 from pages.utils import is_ollama_client_available, is_connected
-from constant import OUTPUT_DIR, OLLAMA_LOCALHOST
+from constant import OUTPUT_DIR
 
 
 ################################ Initialization ###############################
@@ -33,9 +33,6 @@ if "reportAgent" not in st.session_state:
   st.session_state.reportAgent = ReportAgent()
 if "report_history" not in st.session_state:
   st.session_state.report_history = []
-if "ollama_host" not in st.session_state:
-  from constant import OLLAMA_CLIENT
-  st.session_state.ollama_host = OLLAMA_CLIENT
   
 
 ############################## Private methods ##############################
@@ -102,18 +99,19 @@ connectionButton = st.sidebar.toggle(
   key="reportConnectionButton"
 )
 
+# Configure server host based on connection preference
 if connectionButton:
-  conn = is_ollama_client_available(st.session_state.ollama_host)
+  conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
   if conn:
-    st.session_state.baseConfig.ollama_host=st.session_state.ollama_host
-    st.session_state.baseConfig.report_model = st.session_state.models["server_standard"]  
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_distant
+    st.session_state.baseConfig.report_model = st.session_state.baseConfig.server_standard
   else:
-    st.sidebar.warning(f"Could not connect to {st.session_state.ollama_host}")
-    st.session_state.baseConfig.ollama_host=OLLAMA_LOCALHOST
-    st.session_state.baseConfig.report_model = st.session_state.models["local_standard"]  
+    st.sidebar.warning(f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local")
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
+    st.session_state.baseConfig.report_model = st.session_state.baseConfig.local_standard
 else:
-  st.session_state.baseConfig.ollama_host=OLLAMA_LOCALHOST
-  st.session_state.baseConfig.report_model = st.session_state.models["local_standard"]  
+  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local 
+  st.session_state.baseConfig.report_model = st.session_state.baseConfig.local_standard
 
 st.sidebar.write(f"Connected to: {st.session_state.baseConfig.ollama_host}")
 
@@ -125,7 +123,7 @@ st.sidebar.divider()
 writingControl = st.sidebar.segmented_control(
   label="Writing style",
   options=["general","technical"],
-  default="general",
+  default=st.session_state.baseConfig.writing_style,
 )
 
 if writingControl == "technical":
@@ -139,9 +137,6 @@ else:
     "Use this mode when aiming for clarity and synthesis for a broader audience."
   )
 
-# Update the configuration
-st.session_state.baseConfig.writing_style = writingControl
-
 st.sidebar.divider()
 
 # Number of parts slider
@@ -149,11 +144,8 @@ numberOfPartsSlider = st.sidebar.slider(
   label="Number of parts",
   min_value=1,
   max_value=10,
-  value=3,
+  value=st.session_state.baseConfig.number_of_parts,
 )
-
-# Update the configuration
-st.session_state.baseConfig.number_of_parts = numberOfPartsSlider
 
 st.sidebar.divider()
 
@@ -162,11 +154,31 @@ retriverKSlider = st.sidebar.slider(
   label="Number of documents retrieved",
   min_value=1,
   max_value=20,
-  value=4,
+  value=st.session_state.baseConfig.number_of_documents,
 )
 
 # Update the configuration
-#st.session_state.baseConfig.retriever_k = retriverKSlider
+config = Configuration(
+  number_of_parts = numberOfPartsSlider,
+  writing_style = writingControl,
+  number_of_documents = retriverKSlider,
+  ollama_host = st.session_state.baseConfig.ollama_host,
+  ollama_local = st.session_state.baseConfig.ollama_local,
+  ollama_distant = st.session_state.baseConfig.ollama_distant,
+  ocr = st.session_state.baseConfig.ocr,
+  embedding_model = st.session_state.baseConfig.embedding_model,
+  local_reasoning = st.session_state.baseConfig.local_reasoning,
+  local_standard = st.session_state.baseConfig.local_standard,
+  server_reasoning = st.session_state.baseConfig.server_reasoning,
+  server_standard = st.session_state.baseConfig.server_standard,
+  vision_model = st.session_state.baseConfig.vision_model
+)
+
+with open(CONFIG_PATH, "w") as f:
+  json.dump(config.asdict(), f, indent=2)
+
+st.session_state.baseConfig = load_config()
+
 
 ##################################### Page ####################################
 

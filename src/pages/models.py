@@ -4,7 +4,6 @@ import ollama
 from tqdm import tqdm
 from pages.utils import is_connected, is_ollama_client_available
 from core.configuration import load_config
-from constant import OLLAMA_CLIENT, OLLAMA_LOCALHOST
 
 
 ############################## Initialization ##############################
@@ -17,8 +16,6 @@ st.set_page_config(
 
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
-if "ollama_host" not in st.session_state:
-  st.session_state.ollama_host = OLLAMA_CLIENT
   
 
 ############################## Sidebar ##############################
@@ -33,14 +30,14 @@ connectionButton = st.sidebar.toggle(
 
 # Configure server host based on connection preference
 if connectionButton:
-  conn = is_ollama_client_available(st.session_state.ollama_host)
+  conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
   if conn:
-    st.session_state.baseConfig.ollama_host = st.session_state.ollama_host
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_distant
   else:
-    st.sidebar.warning(f"Could not connect to {st.session_state.ollama_host}")
-    st.session_state.baseConfig.ollama_host = OLLAMA_LOCALHOST
+    st.sidebar.warning(f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local")
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 else:
-  st.session_state.baseConfig.ollama_host = OLLAMA_LOCALHOST
+  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 
 st.sidebar.write(f"Connected to: {st.session_state.baseConfig.ollama_host}")
 host = st.session_state.baseConfig.ollama_host

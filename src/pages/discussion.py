@@ -12,7 +12,6 @@ from utils.utils import extract_think_and_answer
 from pages.utils import is_ollama_client_available, is_connected
 from core.agents import RetrievalAgent
 from core.configuration import load_config
-from constant import OLLAMA_LOCALHOST
 
 
 ############################## Initialization ##############################
@@ -24,12 +23,9 @@ st.set_page_config(
 )
 
 if "baseConfig" not in st.session_state:
-  st.session_state.baseConfig = load_config() 
+  st.session_state.baseConfig = load_config()
 if "retrievalAgent" not in st.session_state:
-  st.session_state.retrievalAgent = RetrievalAgent() # Instantiate the retrieval agent
-if "ollama_host" not in st.session_state:
-  from constant import OLLAMA_CLIENT
-  st.session_state.ollama_host = OLLAMA_CLIENT
+  st.session_state.retrievalAgent = RetrievalAgent()
 
 _THREAD = 1
 
@@ -100,14 +96,14 @@ connectionButton = st.sidebar.toggle(
 
 # Configure server host based on connection preference
 if connectionButton:
-  conn = is_ollama_client_available(st.session_state.ollama_host)
+  conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
   if conn:
-    st.session_state.baseConfig.ollama_host = st.session_state.ollama_host
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_distant
   else:
-    st.sidebar.warning(f"Could not connect to {st.session_state.ollama_host}")
-    st.session_state.baseConfig.ollama_host = OLLAMA_LOCALHOST
+    st.sidebar.warning(f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local")
+    st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 else:
-  st.session_state.baseConfig.ollama_host = OLLAMA_LOCALHOST
+  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 
 # Display the current server connection status
 st.sidebar.write(f"Connected to: {st.session_state.baseConfig.ollama_host}")
@@ -119,17 +115,17 @@ reasoningModelButton = st.sidebar.toggle(
 )
 
 # Configure model based on server type and thinking preference
-if reasoningModelButton and st.session_state.baseConfig.ollama_host == OLLAMA_LOCALHOST:
-  st.session_state.baseConfig.response_model = st.session_state.models["local_reasoning"]
+if reasoningModelButton and st.session_state.baseConfig.ollama_host == st.session_state.baseConfig.ollama_local:
+  st.session_state.baseConfig.response_model = st.session_state.baseConfig.local_reasoning
 
-elif not reasoningModelButton and st.session_state.baseConfig.ollama_host == OLLAMA_LOCALHOST:
-  st.session_state.baseConfig.response_model = st.session_state.models["local_standard"]
+elif not reasoningModelButton and st.session_state.baseConfig.ollama_host == st.session_state.baseConfig.ollama_local:
+  st.session_state.baseConfig.response_model = st.session_state.baseConfig.local_standard
 
-elif reasoningModelButton and st.session_state.baseConfig.ollama_host == st.session_state.ollama_host:
-  st.session_state.baseConfig.response_model = st.session_state.models["server_reasoning"]
+elif reasoningModelButton and st.session_state.baseConfig.ollama_host == st.session_state.baseConfig.ollama_distant:
+  st.session_state.baseConfig.response_model = st.session_state.baseConfig.server_reasoning
 
 else:
-  st.session_state.baseConfig.response_model = st.session_state.models["server_standard"]
+  st.session_state.baseConfig.response_model = st.session_state.baseConfig.server_standard
 
 # Display the currently selected model in the sidebar
 st.sidebar.write(f"using model {st.session_state.baseConfig.response_model}")

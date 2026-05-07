@@ -1,7 +1,3 @@
-# src/core/config.py
-# TODO: refactor configuration to use json file for persistence
-
-
 from __future__ import annotations
 
 import json
@@ -37,12 +33,24 @@ class Configuration:
   )
 
   writing_style: Literal["general", "technical"] = field(
-    default = "technical"
+    default = "technical",
+  )
+
+  number_of_documents: int = field(
+    default = 4,
   )
 
   # Ollama configuration
   ollama_host: str = field(
+    default = OLLAMA_CLIENT,
+  )
+
+  ollama_local: str = field(
     default = OLLAMA_LOCALHOST,
+  )
+
+  ollama_distant: str = field(
+    default = OLLAMA_CLIENT,
   )
   
   # Index configuration
@@ -55,16 +63,20 @@ class Configuration:
     default = "nomic-embed-text",
   )
 
-  response_model: str = field(
-    default = "gemma3:1b",   #"qwen3:0.6b",
+  local_reasoning: str = field(
+    default = "qwen3:8b",
   )
 
-  query_model: str = field(
-    default = "gemma3:1b",   #"qwen3:0.6b",
+  local_standard: str = field(
+    default = "qwen3:8b",
   )
 
-  report_model: str = field(
-    default = "gemma3:1b",   #"qwen3:0.6b",
+  server_reasoning: str = field(
+    default = "qwen3:8b",
+  )
+
+  server_standard: str = field(
+    default = "qwen3:8b",
   )
 
   vision_model: str = field(
@@ -117,9 +129,13 @@ def _is_ollama_client_available(url: str) -> bool:
 
 def load_config(cls: Optional[Type[T]] = Configuration) -> T:
   config = cls()
-  if _is_ollama_client_available(OLLAMA_CLIENT):
-    logger.info(f"{OLLAMA_CLIENT} available")
-    config.ollama_host = OLLAMA_CLIENT
+  if not CONFIG_PATH.exists():
+    with CONFIG_PATH.open("w") as f:
+      json.dump(config.asdict(), f, indent=2)
+  else:
+    with CONFIG_PATH.open("r") as f:
+      data = json.load(f)
+    config = cls(**data)
   return config
 
 # def _init_configuration() -> Configuration:
