@@ -5,17 +5,11 @@ from pathlib import Path
 
 from core.configuration import load_config
 from core.agents import IndexAgent
-from core.retrieval import delete_documents, get_existing_documents
+from core.retrieval import delete_documents, get_existing_documents, _CLEARANCE_LEVELS
 from constant import UPLOAD_DIR
-from core.retrieval import get_existing_documents
 from pages.utils import is_ollama_client_available, is_connected
 
-
-# TODO: fix the page displaying update successful when the graph ran into an error (happened with a failed connection to ollama)
-# Error was displayed but also the message "update successful", should not be the case
-
 ############################## Initialize session state ##############################
-
 
 st.set_page_config(
   page_title="Documents",
@@ -30,6 +24,8 @@ if "indexAgent" not in st.session_state:
 st.markdown("# Documents")
 
 # Define constants
+user_clearance = st.session_state.baseConfig.clearance_level
+
 # Ensure upload directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -40,16 +36,17 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 def _reset_vector_store():
   with st.spinner("Updating database..."):
       try:
-        documents = get_existing_documents()
+        user_clearance = st.session_state.baseConfig.clearance_level
+        documents = get_existing_documents(clearance_level=user_clearance)
         for doc in documents:
-          delete_documents(docs=doc)
+          delete_documents(docs=doc, clearance_level=user_clearance)
       except Exception as e:
         st.error(f"Error clearing database: {str(e)}")
       else:
         st.success("Database has been cleared.")
 
 
-def _process_files(uploaded_files):
+def _process_files(uploaded_files, clearance_level):
   success_count = 0
   error_count = 0
   # Process each uploaded file
@@ -74,14 +71,14 @@ def _process_files(uploaded_files):
 
   with st.spinner("Updating database..."):
     try:
-      st.session_state.indexAgent.invoke(path = UPLOAD_DIR, configuration = st.session_state.baseConfig)
+      st.session_state.indexAgent.invoke(path = UPLOAD_DIR, configuration = st.session_state.baseConfig, clearance_level=selected_clearance)
+      st.success("Database has been updated.")
     except Exception as e:
       st.error(f"Error updating database: {str(e)}")
     
     for file in os.listdir(UPLOAD_DIR):
       file_path = os.path.join(UPLOAD_DIR, file)
       os.remove(file_path)
-    st.success("Database has been updated.")
   
   # Show results
   if error_count > 0:
@@ -133,27 +130,36 @@ else:
 uploaded_files = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files is not None and len(uploaded_files) > 0:
+
+  # Only display the clearance level the user has access to
+  visible_clearances = [
+    lvl for lvl in _CLEARANCE_LEVELS if _CLEARANCE_LEVELS[lvl] <= _CLEARANCE_LEVELS[user_clearance]
+  ]
+
+  selected_clearance = st.segmented_control(
+    "Documents clearance level",
+    options=visible_clearances,
+    default=visible_clearances[-1], # Default to the highest clearance to avoid accidental underclassification
+    format_func=lambda x: x.replace("_", " "),
+    help="Select the clearance level required to access the uploaded documents.",
+  )
+
+  disable_upload = selected_clearance is None
   
   # Upload button
+  button_help = "Please select a clearance level before uploading" if disable_upload else ""
+
   uploadButton=st.button(
     label="Upload",
     type="primary",
-    #on_click=_process_files(uploaded_files)
-  )
+    disabled=disable_upload,
+    help=button_help,)
   if uploadButton:
-    _process_files(uploaded_files)
+    _process_files(uploaded_files, selected_clearance)
 
-
-# Reset button
-st.button(
-  label="🗑️ Reset database",
-  type="primary",
-  use_container_width=True,
-  on_click=_reset_vector_store
-)
 
 # Display existing documents
-files = [f for f in get_existing_documents()]
+files = [f for f in get_existing_documents(user_clearance)]
 for file in files:
     col1, col2 = st.columns([5, 1])
     with col1:
@@ -161,7 +167,7 @@ for file in files:
     with col2:
       if st.button("🗑️ Delete", key=f"delete_{file}"):
         try:
-          delete_documents(docs = file)
+          delete_documents(docs=file, clearance_level=user_clearance)
         except Exception as e:
           st.error(f"Error deleting document: {str(e)}")
         st.rerun()

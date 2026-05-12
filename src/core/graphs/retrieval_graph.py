@@ -140,17 +140,21 @@ def retrieve(
       logger.error("Configuration not found in config")
       raise ValueError("Configuration is required for document retrieval")
     
+    # Get clearance level
+    clearance = configuration.clearance_level
+    
     logger.debug(f"Using embedding model: {configuration.embedding_model}")
+    logger.info(f"User clearance level: {clearance}")
     
     # Load embedding model
     embeddings = load_embedding_model(
       model=configuration.embedding_model, 
       host=configuration.ollama_host
     )
-    
+
     # Retrieve documents
-    with retrieval.make_retriever(embedding_model=embeddings) as retriever:
-      response = retriever.invoke(state.query, config)
+    with retrieval.make_retriever(embedding_model=embeddings, clearance_level=clearance) as retriever:
+      response = retriever.ainvoke(state.query, config)
       
       if response:
         logger.info(f"Successfully retrieved {len(response)} documents")

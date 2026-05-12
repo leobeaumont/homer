@@ -92,8 +92,8 @@ class IndexAgent(BaseAgent):
   def __init__(self):
     super().__init__(get_index_graph()) # Compile the retrieval agent graph
 
-  def invoke(self, path: str, configuration: Configuration):
-    self._graph.invoke(input={"path": path}, config = {"configurable": configuration.asdict()})
+  def invoke(self, path: str, configuration: Configuration, clearance_level: str):
+    self._graph.invoke(input={"path": path, "clearance_level": clearance_level}, config = {"configurable": configuration.asdict()})
 
 
 ################################ Report Agent #################################

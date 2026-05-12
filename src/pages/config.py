@@ -93,6 +93,7 @@ if submitted:
       ollama_local = ollama_local,
       ollama_distant = ollama_distant,
       ocr = st.session_state.baseConfig.ocr,
+      clearance_level= st.session_state.baseConfig.clearance_level,
       embedding_model = st.session_state.baseConfig.embedding_model,
       local_reasoning = local_reasoning_model,
       local_standard = local_standard_model,

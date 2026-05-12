@@ -47,8 +47,8 @@ def _stream_with_thinking_separation(query: str):
   """
   accumulated_text = ""
   if (
-    st.session_state.baseConfig.response_model == st.session_state.models["server_reasoning"]
-    or st.session_state.baseConfig.response_model == st.session_state.models["local_reasoning"]
+    st.session_state.baseConfig.response_model == st.session_state.baseConfig.server_reasoning
+    or st.session_state.baseConfig.response_model == st.session_state.baseConfig.local_reasoning
   ):
     thinking_placeholder = st.expander("Show Thinking")
   response_placeholder = st.empty()

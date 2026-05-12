@@ -14,14 +14,18 @@ from langchain_core.callbacks import AsyncCallbackManagerForRetrieverRun, Callba
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import ensure_config, patch_config
 
+from core.configuration import Configuration
 from utils.utils import VECTORSTORE_DIR, get_chroma_client
 
-
+# Accept names matching: [a-zA-Z0-9._-]*[a-zA-Z0-9]
 _CLEARANCE_LEVELS = {
     "PUBLIC": 0,
-    "INTERNAL": 1,
-    "SECRET": 2
+    "RESTRICTED": 1,
+    "CONFIDENTIAL": 2,
+    "RESTRICTED_NUC": 3,
+    "CONFIDENTIAL_NUC": 4,
 }
 _COLLECTION_METADATA = {"hnsw:space": "cosine"}
 
@@ -81,7 +85,7 @@ def get_existing_documents(clearance_level: str = "PUBLIC") -> list[str]:
   sources = set()
   for level in levels_to_check:
     try:
-      collection = client.get_collection(name=get_collection_name(level), metadata=_COLLECTION_METADATA)
+      collection = client.get_or_create_collection(name=get_collection_name(level), metadata=_COLLECTION_METADATA)
 
       # Get all documents with their metadata
       results = collection.get(include=["metadatas"])
@@ -114,7 +118,7 @@ def delete_documents(docs: str | list[str], clearance_level: str = "PUBLIC"):
 
   for level in levels_to_check:
     try:
-      collection = client.get_collection(name=get_collection_name(level), metadata=_COLLECTION_METADATA)
+      collection = client.get_or_create_collection(name=get_collection_name(level), metadata=_COLLECTION_METADATA)
 
       for doc_source in docs:
         # Delete all documents with the specified source
@@ -133,11 +137,73 @@ class MultiCollectionRetriever(BaseRetriever):
   retrievers: List[BaseRetriever]
   k: int = Field(default=4)
 
+  def add_documents(
+    self, 
+    documents: List[Document], 
+    required_clearance: str = max(_CLEARANCE_LEVELS, key=_CLEARANCE_LEVELS.get),  # Default to highest clearance
+    **kwargs
+  ) -> List[str]:
+    """Add documents to a specific collection level."""
+    # Get user clearance level
+    config = ensure_config()
+    configuration = Configuration.from_runnable_config(config)
+    clearance_level = configuration.clearance_level
+
+    if _CLEARANCE_LEVELS[required_clearance] > _CLEARANCE_LEVELS[clearance_level]:
+      raise PermissionError(
+        f"User clearance level '{clearance_level}' ({_CLEARANCE_LEVELS[clearance_level]}) is "
+        f"insufficient to add documents with required clearance '{required_clearance}' "
+        f"({_CLEARANCE_LEVELS[required_clearance]})."
+      )
+    
+    # Get collection corresponding to document's required clearance
+    target_collection = get_collection_name(required_clearance)
+    for retriever in self.retrievers:
+      if hasattr(retriever, "vectorstore"):
+        if retriever.vectorstore._collection.name == target_collection:
+          return retriever.add_documents(documents, **kwargs)
+    
+    raise ValueError(f"No retriever found for clearance level '{required_clearance}'.")
+
+
+  async def aadd_documents(
+    self, 
+    documents: List[Document], 
+    required_clearance: str = max(_CLEARANCE_LEVELS, key=_CLEARANCE_LEVELS.get),  # Default to highest clearance
+    **kwargs
+  ) -> List[str]:
+    """Async add documents to a specific collection level."""
+    # Get user clearance level
+    config = ensure_config()
+    configuration = Configuration.from_runnable_config(config)
+    clearance_level = configuration.clearance_level
+
+    if _CLEARANCE_LEVELS[required_clearance] > _CLEARANCE_LEVELS[clearance_level]:
+      raise PermissionError(
+        f"User clearance level '{clearance_level}' ({_CLEARANCE_LEVELS[clearance_level]}) is "
+        f"insufficient to add documents with required clearance '{required_clearance}' "
+        f"({_CLEARANCE_LEVELS[required_clearance]})."
+      )
+    
+    # Get collection corresponding to document's required clearance
+    target_collection = get_collection_name(required_clearance)
+    for retriever in self.retrievers:
+      if hasattr(retriever, "vectorstore"):
+        if retriever.vectorstore._collection.name == target_collection:
+          return await retriever.aadd_documents(documents, **kwargs)
+    
+    raise ValueError(f"No retriever found for clearance level '{required_clearance}'.")
+
+
   def _get_relevant_documents(
     self, query: str, *, run_manager: CallbackManagerForRetrieverRun
   ) -> List[Document]:
     """Sync retrieval (fallback)."""
-    results = [retriever.invoke(query) for retriever in self.retrievers]
+    # Propagate config to child retrievers
+    config = ensure_config()
+    child_config = patch_config(config, callbacks=run_manager.get_child())
+
+    results = [retriever.invoke(query, config=child_config) for retriever in self.retrievers]
 
     # Use RRF to get only best k results across all retrievers
     return self._apply_rrf(results_lists=results)
@@ -146,8 +212,12 @@ class MultiCollectionRetriever(BaseRetriever):
     self, query: str, *, run_manager: AsyncCallbackManagerForRetrieverRun
   ) -> List[Document]:
     """Parallel async retrieval using asyncio.gather."""
+    # Propagate config to child retrievers
+    config = ensure_config()
+    child_config = patch_config(config, callbacks=run_manager.get_child())
+
     # Execute all retriever tasks simultaneously
-    tasks = [retriever.ainvoke(query) for retriever in self.retrievers]
+    tasks = [retriever.ainvoke(query, config=child_config) for retriever in self.retrievers]
     results = await asyncio.gather(*tasks)
     
     # Use RRF to get only best k results across all retrievers

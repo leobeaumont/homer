@@ -155,11 +155,14 @@ class InputIndexState:
   """Represents the input state for document indexing.
 
   This class defines the structure of the input index state, which includes
-  the path of the documents to be indexed.
+  the path of the documents to be indexed and its clearance level.
   """
 
   path: str
   """The path to the files."""
+
+  clearance_level: str
+  """The clearance level for the documents."""
 
 
 @dataclass(kw_only=True)

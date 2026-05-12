@@ -99,10 +99,12 @@ def initial_retrieval(
     main_query = get_message_text(state.messages[-1])
     logger.info(f"Processing main query: '{main_query}'")
     logger.debug(f"Using embedding model: {configuration.embedding_model}")
+    logger.info(f"User clearance level: {configuration.clearance_level}")
     
     # Setup retriever with embedding model
     with retrieval.make_retriever(
-      embedding_model=load_embedding_model(model=configuration.embedding_model, host=configuration.ollama_host),   
+      embedding_model=load_embedding_model(model=configuration.embedding_model, host=configuration.ollama_host),
+      clearance_level=configuration.clearance_level,   
     ) as retriever:
       logger.debug("Retriever initialized successfully")
       
@@ -230,10 +232,12 @@ def retrieve_for_section(
     current_section = state.outlines[state.current_section_index]
     logger.info(f"Retrieving documents for section: '{current_section}'")
     logger.debug(f"Using embedding model: {configuration.embedding_model}")
+    logger.info(f"User clearance level: {configuration.clearance_level}")
     
     # Setup retriever and perform document retrieval
     with retrieval.make_retriever(
-      embedding_model=load_embedding_model(model=configuration.embedding_model, host=configuration.ollama_host),   
+      embedding_model=load_embedding_model(model=configuration.embedding_model, host=configuration.ollama_host),
+      clearance_level=configuration.clearance_level,   
     ) as retriever:
       logger.debug("Section retriever initialized successfully")
       

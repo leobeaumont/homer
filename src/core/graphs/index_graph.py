@@ -17,7 +17,6 @@ from core.models import load_embedding_model
 from utils.utils import remove_duplicates, make_batch
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-#from langchain_experimental.text_splitter import SemanticChunker
 from langchain_community.document_loaders import PyMuPDFLoader
 from parser import VisionLoader
 
@@ -47,15 +46,6 @@ def parse_pdfs(
     )
     
     logger.info(f"Found {len(pdf_files)} new PDF files to process")
-    
-    #embeddings = load_embedding_model(model=Configuration.embedding_model, host=Configuration.ollama_host)
-
-    # Configure text splitter
-    #text_splitter = SemanticChunker(
-    #  embeddings=embeddings,
-    #  breakpoint_threshold_type="percentile",
-    #  min_chunk_size=256,
-    #)
     
     text_splitter = RecursiveCharacterTextSplitter(
       chunk_size=1024,
@@ -130,9 +120,10 @@ def index_docs(
       raise ValueError("Configuration required to run index_docs.")
     
     logger.info(f"Using embedding model: {configuration.embedding_model}")
+    logger.info(f"User clearance level: {configuration.clearance_level}")
     
     # Prepare document batches
-    documents_batch = make_batch(obj=state.docs, size= 20)
+    documents_batch = make_batch(obj=state.docs, size=20)
     total_batches = len(documents_batch)
     total_documents = len(state.docs)
     
@@ -140,12 +131,13 @@ def index_docs(
 
     # Index documents using the retriever
     with retrieval.make_retriever(
-      embedding_model=load_embedding_model(model=configuration.embedding_model)
+      embedding_model=load_embedding_model(model=configuration.embedding_model),
+      clearance_level=configuration.clearance_level,
     ) as retriever:
       
       for i, batch in enumerate(tqdm(documents_batch, desc="Adding document batch..."), 1):
         try:
-          retriever.add_documents(batch)
+          retriever.add_documents(batch, state.clearance_level)
           logger.debug(f"Successfully indexed batch {i}/{total_batches} ({len(batch)} documents)")
           
         except Exception as e:
