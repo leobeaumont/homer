@@ -21,10 +21,36 @@ if "baseConfig" not in st.session_state:
 if "indexAgent" not in st.session_state:
   st.session_state.indexAgent = IndexAgent()
 
-st.markdown("# Documents")
-
 # Define constants
 user_clearance = st.session_state.baseConfig.clearance_level
+
+# Columns for title and user clearance level
+col_title, col_status = st.columns([3, 1])
+
+with col_title:
+  st.markdown("# Documents")
+
+with col_status:
+  # Vertical spacing to align with header
+  st.markdown('<div style="padding-top: 1.5rem;"></div>', unsafe_allow_html=True)
+  
+  st.markdown(
+    f"""
+    <div style="
+      background-color: #E6E6FA; 
+      border: 1px solid #D8BFD8;
+      padding: 8px;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      color: #483D8B; 
+      line-height: 1.2;
+    ">
+      User access:<br>
+      <b style="font-size: 0.85rem; color: #2F2F2F;">{user_clearance.replace('_', ' ')}</b>
+    </div>
+    """,
+    unsafe_allow_html=True
+  )
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -144,6 +170,29 @@ if uploaded_files is not None and len(uploaded_files) > 0:
     help="Select the clearance level required to access the uploaded documents.",
   )
 
+  if selected_clearance:
+    max_clearance = visible_clearances[-1]
+    min_clearance = visible_clearances[0]
+    # Compare numeric ranks from your mapping
+    if _CLEARANCE_LEVELS[selected_clearance] == _CLEARANCE_LEVELS[max_clearance]:
+      st.success(
+        f"Currently using maximal document security. "
+        f"Only users with **{selected_clearance.replace('_', ' ')}** clearance or higher will have access to these documents."
+        , icon="🛡️"
+      )
+    elif _CLEARANCE_LEVELS[selected_clearance] == _CLEARANCE_LEVELS[min_clearance]:
+      st.error(
+        f"Lowering clearance from **{max_clearance.replace('_', ' ')}** to **{selected_clearance.replace('_', ' ')}**. "
+        "Everyone will have access to these documents.",
+        icon="🔓"
+      )
+    else:
+      st.warning(
+        f"Lowering clearance from **{max_clearance.replace('_', ' ')}** to **{selected_clearance.replace('_', ' ')}**. "
+        "Please ensure this matches the document's actual security requirements.",
+        icon="⚠️"
+      )
+
   disable_upload = selected_clearance is None
   
   # Upload button
@@ -157,17 +206,26 @@ if uploaded_files is not None and len(uploaded_files) > 0:
   if uploadButton:
     _process_files(uploaded_files, selected_clearance)
 
+# Display existing documents using st.status
+for clearance, files in get_existing_documents(user_clearance).items():
+  if files:
+    label = f"{clearance.replace('_', ' ')}"
 
-# Display existing documents
-files = [f for f in get_existing_documents(user_clearance)]
-for file in files:
-    col1, col2 = st.columns([5, 1])
-    with col1:
-      st.write(f"📄 {Path(file).stem}")
-    with col2:
-      if st.button("🗑️ Delete", key=f"delete_{file}"):
-        try:
-          delete_documents(docs=file, clearance_level=user_clearance)
-        except Exception as e:
-          st.error(f"Error deleting document: {str(e)}")
-        st.rerun()
+    state = "complete" if clearance == "PUBLIC" else "error"
+
+    with st.status(label, state=state, expanded=True):
+      for file in files:
+        col1, col2 = st.columns([0.9, 0.1])
+        
+        with col1:
+          st.markdown(f"📄 {Path(file).stem}")
+        
+        with col2:
+          if st.button("🗑️", key=f"del_{clearance}_{file}"):
+            try:
+              delete_documents(docs=file, clearance_level=user_clearance)
+              st.rerun()
+            except Exception as e:
+              st.error(f"Error: {str(e)}")
+    # Add spacing between categories
+    st.write("")

@@ -81,8 +81,9 @@ def get_existing_documents(clearance_level: str = "PUBLIC") -> list[str]:
   """
   client=get_chroma_client()
   levels_to_check = [lvl for lvl in _CLEARANCE_LEVELS if _CLEARANCE_LEVELS[lvl] <= _CLEARANCE_LEVELS[clearance_level]]
+  levels_to_check.reverse()
 
-  sources = set()
+  sources = {}
   for level in levels_to_check:
     try:
       collection = client.get_or_create_collection(name=get_collection_name(level), metadata=_COLLECTION_METADATA)
@@ -91,15 +92,18 @@ def get_existing_documents(clearance_level: str = "PUBLIC") -> list[str]:
       results = collection.get(include=["metadatas"])
 
       # Extract unique sources from metadata
+      buffer = set()
       for metadata in results["metadatas"]:
         if metadata and "source" in metadata.keys():
-          sources.add(metadata["source"])
+          buffer.add(metadata["source"])
+
+      sources[level.replace("_", " ")] = list(buffer)
 
     except Exception as e:
       print(f"Error while accessing {level} collection: {e}")
   
   del client
-  return list(sources)
+  return sources
 
 
 def delete_documents(docs: str | list[str], clearance_level: str = "PUBLIC"):
