@@ -2,6 +2,31 @@
 Utility functions for Streamlit pages.
 """
 
+###################### ChromaDB client availability check #####################
+
+
+def is_chromadb_client_available() -> bool:
+  """
+  Check if ChromaDB server is available at the given URL.
+  
+  Args:
+    url: The ChromaDB server URL to test
+    
+  Returns:
+    True if server responds successfully, False otherwise
+  """
+  import streamlit as st
+  from utils.utils import get_chroma_client
+  
+  try:
+    # Update client 
+    get_chroma_client()
+    # Return connection status
+    return st.session_state.remote_chroma
+  except Exception:
+    return False
+
+
 ####################### Ollama client availability check ######################
 
 

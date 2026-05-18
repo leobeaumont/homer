@@ -5,6 +5,7 @@ OLLAMA_LOCALHOST = "http://127.0.0.1:11434/" # local ollama instance
 UPLOAD_DIR = "./user_data/temp"
 OUTPUT_DIR = "./user_data/outputs"
 VECTORSTORE_DIR = "./user_data/vectorstore/"
+DATABASE_ENDPOINT = "http://127.0.0.1:8000/" # Endpoint to ChromaDB server
 LOG_LEVEL = "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 

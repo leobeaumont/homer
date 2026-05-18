@@ -15,10 +15,28 @@ def get_connection() -> sqlite3.Connection:
 ############################# connect to database #############################
 
 
-from chromadb import PersistentClient
+from chromadb import HttpClient, PersistentClient
+import streamlit as st
+import logging
 
+logger = logging.getLogger(__name__)
 
-def get_chroma_client() -> PersistentClient:
+def get_chroma_client() -> HttpClient | PersistentClient:
+  endpoint = st.session_state.baseConfig.database_endpoint
+
+  try:
+    host, port = endpoint.replace("http://", "").replace("https://", "").strip("/").split(":")
+    client = HttpClient(host=host, port=int(port))
+    client.heartbeat()
+    logger.info(f"Connected to ChromaDB at '{endpoint}'")
+    st.session_state.remote_chroma = True
+    return client
+
+  except Exception as e:
+    logger.warning(f"Could not connect to ChromaDB at '{endpoint}': {e}")
+    logger.info(f"Falling back to local ChromaDB client at '{VECTORSTORE_DIR}'")
+    st.session_state.remote_chroma = False
+
   return PersistentClient(path=VECTORSTORE_DIR)
 
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, fields
 from typing import Optional, Type, TypeVar, Literal
 from pathlib import Path
 
-from constant import OLLAMA_CLIENT, OLLAMA_LOCALHOST
+from constant import OLLAMA_CLIENT, OLLAMA_LOCALHOST, DATABASE_ENDPOINT
 
 from langchain_core.runnables import RunnableConfig, ensure_config
 
@@ -51,6 +51,11 @@ class Configuration:
 
   ollama_distant: str = field(
     default = OLLAMA_CLIENT,
+  )
+
+  # RAG configuration
+  database_endpoint: str = field(
+    default = DATABASE_ENDPOINT,
   )
   
   # Index configuration

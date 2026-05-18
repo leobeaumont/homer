@@ -15,8 +15,8 @@ from datetime import datetime
 from core.agents import ReportAgent
 from core.configuration import load_config, Configuration, CONFIG_PATH
 from utils.converter import dict_to_pdf
-from pages.utils import is_ollama_client_available, is_connected
-from constant import OUTPUT_DIR
+from pages.utils import is_chromadb_client_available, is_ollama_client_available, is_connected
+from constant import OUTPUT_DIR, VECTORSTORE_DIR
 
 
 ################################ Initialization ###############################
@@ -91,6 +91,15 @@ def _create_report(query:str):
 
 ################################### Sidebar ###################################
 
+
+# Check ChromaDB connection
+if is_chromadb_client_available():
+  st.sidebar.write(f"Connected to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+else:
+  st.sidebar.warning(f"Could not connect to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+  st.sidebar.write(f"Using local ChromaDB in: {VECTORSTORE_DIR}")
+
+st.sidebar.divider()
 
 # Connection button
 connectionButton = st.sidebar.toggle(

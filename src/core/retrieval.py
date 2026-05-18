@@ -56,6 +56,8 @@ def make_retriever(
   """
   from langchain_chroma import Chroma
 
+  client = get_chroma_client()
+
   search_kwargs = {"k":kwargs.get("k",4)}
   levels_to_check = [lvl for lvl in _CLEARANCE_LEVELS if _CLEARANCE_LEVELS[lvl] <= _CLEARANCE_LEVELS[clearance_level]]
 
@@ -63,9 +65,9 @@ def make_retriever(
   for level in levels_to_check:
     vector_store = Chroma(
       collection_name = get_collection_name(level),
-      collection_metadata= _COLLECTION_METADATA,
+      collection_metadata = _COLLECTION_METADATA,
       embedding_function = embedding_model,
-      persist_directory = VECTORSTORE_DIR,  # Where to save data locally, remove if not necessary
+      client = client,
     )
     retrievers.append(vector_store.as_retriever(search_kwargs=search_kwargs))
 
@@ -79,7 +81,7 @@ def get_existing_documents(clearance_level: str = "PUBLIC") -> list[str]:
   Returns:
     list[str]: List of unique source file names
   """
-  client=get_chroma_client()
+  client = get_chroma_client()
   levels_to_check = [lvl for lvl in _CLEARANCE_LEVELS if _CLEARANCE_LEVELS[lvl] <= _CLEARANCE_LEVELS[clearance_level]]
   levels_to_check.reverse()
 

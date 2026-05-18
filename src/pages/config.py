@@ -27,6 +27,9 @@ config = st.session_state.baseConfig
 
 # Create form for configuration
 with st.form("config_form"):
+
+  st.subheader("Ollama Configuration")
+
   # Ollama host
   ollama_local = st.text_input(
     "local Ollama URL",
@@ -38,6 +41,15 @@ with st.form("config_form"):
     "distant Ollama URL",
     value=st.session_state.baseConfig.ollama_distant,
     help="The URL for the distant Ollama service. Must be a valid URL."
+  )
+
+  st.subheader("RAG Configuration")
+
+  # RAG configuration
+  database_endpoint = st.text_input(
+    "distant database URL",
+    value=st.session_state.baseConfig.database_endpoint,
+    help="The URL for the distant database service. Must be a valid URL."
   )
   
   st.subheader("Model Configuration")
@@ -82,6 +94,9 @@ if submitted:
   if ollama_distant and not ollama_distant.startswith(('http://', 'https://')):
     st.error("Distant Ollama URL should start with http:// or https://")
     valid = False
+  if database_endpoint and not database_endpoint.startswith(('http://', 'https://')):
+    st.error("Distant database URL should start with http:// or https://")
+    valid = False
   
   if valid:
     # Update configuration
@@ -92,6 +107,7 @@ if submitted:
       ollama_host = st.session_state.baseConfig.ollama_host,
       ollama_local = ollama_local,
       ollama_distant = ollama_distant,
+      database_endpoint = database_endpoint,
       ocr = st.session_state.baseConfig.ocr,
       clearance_level= st.session_state.baseConfig.clearance_level,
       embedding_model = st.session_state.baseConfig.embedding_model,

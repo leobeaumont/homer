@@ -6,8 +6,8 @@ from pathlib import Path
 from core.configuration import load_config
 from core.agents import IndexAgent
 from core.retrieval import delete_documents, get_existing_documents, _CLEARANCE_LEVELS
-from constant import UPLOAD_DIR
-from pages.utils import is_ollama_client_available, is_connected
+from constant import UPLOAD_DIR, VECTORSTORE_DIR
+from pages.utils import is_chromadb_client_available, is_ollama_client_available, is_connected
 
 ############################## Initialize session state ##############################
 
@@ -114,7 +114,13 @@ def _process_files(uploaded_files, clearance_level):
 ############################## Sidebar ##############################
 
 
-conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
+if is_chromadb_client_available():
+  st.sidebar.write(f"Connected to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+else:
+  st.sidebar.warning(f"Could not connect to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+  st.sidebar.write(f"Using local ChromaDB in: {VECTORSTORE_DIR}")
+
+st.sidebar.divider()
 
 connectionButton = st.sidebar.toggle(
   label = "Server execution",

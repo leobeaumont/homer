@@ -8,8 +8,9 @@ The interface allows users to configure server connections and model settings.
 
 import streamlit as st
 
+from constant import VECTORSTORE_DIR
 from utils.utils import extract_think_and_answer
-from pages.utils import is_ollama_client_available, is_connected
+from pages.utils import is_chromadb_client_available, is_ollama_client_available, is_connected
 from core.agents import RetrievalAgent
 from core.configuration import load_config
 
@@ -86,6 +87,15 @@ def _stream_with_thinking_separation(query: str):
 
 ############################## Sidebar ##############################
 
+
+# Check ChromaDB connection
+if is_chromadb_client_available():
+  st.sidebar.write(f"Connected to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+else:
+  st.sidebar.warning(f"Could not connect to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
+  st.sidebar.write(f"Using local ChromaDB in: {VECTORSTORE_DIR}")
+
+st.sidebar.divider()
 
 # Server connection toggle
 connectionButton = st.sidebar.toggle(
