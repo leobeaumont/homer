@@ -2,11 +2,65 @@ from utils.logging import get_logger
 # Configure logger
 logger = get_logger(__name__)
 
-from typing import Optional
+import streamlit as st
+from typing import Callable, Optional
 from pathlib import Path
 from tqdm import tqdm
 
-from langchain_core.runnables import RunnableConfig
+
+def _init_indexing_state(total_documents: int = 0, total_chunks: int = 0) -> None:
+  """Initialize index progress state in Streamlit session state."""
+  try:
+    st.session_state.indexing_status = {
+      "phase": "parsing",
+      "current_document_index": 0,
+      "total_documents": total_documents,
+      "current_document_name": "",
+      "chunks_parsed": 0,
+      "total_chunks": total_chunks,
+      "current_batch": 0,
+      "total_batches": 0,
+      "chunks_indexed": 0,
+      "status_message": "Starting indexing workflow.",
+    }
+  except Exception:
+    pass
+
+
+def _get_progress_callback(config: Optional[RunnableConfig]) -> Optional[Callable[[dict], None]]:
+  try:
+    if config is None:
+      return None
+    config = ensure_config(config)
+    callback = config.get("configurable", {}).get("progress_callback")
+    if callable(callback):
+      return callback
+  except Exception:
+    pass
+  return None
+
+
+def _call_progress_callback(status: dict, config: Optional[RunnableConfig] = None) -> None:
+  progress_callback = _get_progress_callback(config)
+  if progress_callback is not None:
+    try:
+      progress_callback(status)
+    except Exception:
+      pass
+
+
+def _update_indexing_state(config: Optional[RunnableConfig] = None, **kwargs) -> None:
+  """Update indexing progress values in Streamlit session state."""
+  try:
+    if "indexing_status" not in st.session_state:
+      st.session_state.indexing_status = {}
+    st.session_state.indexing_status.update(kwargs)
+    _call_progress_callback(st.session_state.indexing_status, config)
+  except Exception:
+    pass
+
+
+from langchain_core.runnables import RunnableConfig, ensure_config
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 
@@ -45,7 +99,11 @@ def parse_pdfs(
       new=[str(p) for p in list(path.glob("*.pdf"))]
     )
     
-    logger.info(f"Found {len(pdf_files)} new PDF files to process")
+    total_pdfs = len(pdf_files)
+    _init_indexing_state(total_documents=total_pdfs, total_chunks=0)
+    chunks_parsed = 0
+    
+    logger.info(f"Found {total_pdfs} new PDF files to process")
     
     text_splitter = RecursiveCharacterTextSplitter(
       chunk_size=1024,
@@ -59,9 +117,17 @@ def parse_pdfs(
       return {"docs": documents}
 
     # Process each PDF file
-    for pdf_file in tqdm(pdf_files, desc="Loading files..."):
+    for i, pdf_file in enumerate(tqdm(pdf_files, desc="Loading files..."), 1):
       try:
         logger.debug(f"Processing file: {pdf_file}")
+        _update_indexing_state(
+          config=config,
+          phase="parsing",
+          current_document_index=i,
+          current_document_name=Path(pdf_file).name,
+          chunks_parsed=chunks_parsed,
+          status_message="Parsing documents"
+        )
         
         # Load the file into a Document object
         if configuration.ocr:
@@ -87,6 +153,12 @@ def parse_pdfs(
           c.metadata={"source": pdf_file}
         # Add them to the list of Documents
         documents.extend(chunks)
+        chunks_parsed += len(chunks)
+        _update_indexing_state(
+          config=config,
+          chunks_parsed=chunks_parsed,
+          total_chunks=chunks_parsed,
+        )
         
         logger.debug(f"Successfully processed {pdf_file}, created {len(chunks)} chunks")
         
@@ -94,6 +166,14 @@ def parse_pdfs(
         logger.error(f"Failed to process file {pdf_file}: {str(e)}")
         continue
 
+    _update_indexing_state(
+      config=config,
+      phase="parsing_complete",
+      current_document_name="",
+      status_message=f"PDF parsing completed. Total chunks created: {len(documents)}",
+      total_chunks=len(documents),
+      chunks_parsed=len(documents)
+    )
     logger.info(f"PDF parsing completed. Total document chunks created: {len(documents)}")
     return {"docs": documents}
   
@@ -125,11 +205,27 @@ def index_docs(
     # Prepare document batches
     documents_batch = make_batch(obj=state.docs, size=20)
     total_batches = len(documents_batch)
-    total_documents = len(state.docs)
+    total_chunks = len(state.docs)
+    source_files = [doc.metadata.get("source", "") for doc in state.docs]
+    unique_sources = list(dict.fromkeys(source_files))
+    total_documents = len(unique_sources)
+    processed_sources: set[str] = set()
+    chunks_indexed = 0
     
-    logger.info(f"Processing {total_documents} documents in {total_batches} batches")
-
-    # Index documents using the retriever
+    _update_indexing_state(
+      config=config,
+      phase="indexing",
+      total_documents=total_documents,
+      total_chunks=total_chunks,
+      total_batches=total_batches,
+      chunks_indexed=0,
+      current_batch=0,
+      current_document_index=0,
+      current_document_name="",
+      status_message="Starting document indexing"
+    )
+    
+    logger.info(f"Processing {total_chunks} chunks in {total_batches} batches")
     with retrieval.make_retriever(
       embedding_model=load_embedding_model(model=configuration.embedding_model),
       clearance_level=configuration.clearance_level,
@@ -137,14 +233,38 @@ def index_docs(
       
       for i, batch in enumerate(tqdm(documents_batch, desc="Adding document batch..."), 1):
         try:
+          batch_sources = {Path(doc.metadata.get("source", "")).name for doc in batch}
+          processed_sources.update(batch_sources)
+          chunks_indexed += len(batch)
+          _update_indexing_state(
+            config=config,
+            current_batch=i,
+            total_batches=total_batches,
+            chunks_indexed=chunks_indexed,
+            current_document_index=len(processed_sources),
+            current_document_name=", ".join(sorted(batch_sources)) if batch_sources else "",
+            status_message=f"Indexing batch {i}/{total_batches} ({len(batch)} chunks)"
+          )
           retriever.add_documents(batch, state.clearance_level)
           logger.debug(f"Successfully indexed batch {i}/{total_batches} ({len(batch)} documents)")
           
         except Exception as e:
+          _update_indexing_state(
+            phase="error",
+            status_message=f"Failed to index batch {i}/{total_batches}: {str(e)}"
+          )
           logger.error(f"Failed to index batch {i}/{total_batches}: {str(e)}")
           raise
     
-    logger.info(f"Document indexing completed successfully. Indexed {total_documents} documents")
+    _update_indexing_state(
+      config=config,
+      phase="done",
+      chunks_indexed=total_chunks,
+      current_batch=total_batches,
+      current_document_index=total_documents,
+      status_message=f"Document indexing completed successfully. Indexed {total_chunks} chunks from {total_documents} source documents."
+    )
+    logger.info(f"Document indexing completed successfully. Indexed {total_chunks} chunks")
     return {"docs": "delete"}
   
   except Exception as e:

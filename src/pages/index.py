@@ -75,6 +75,43 @@ def _reset_vector_store():
 def _process_files(uploaded_files, clearance_level):
   success_count = 0
   error_count = 0
+  st.session_state.indexing_status = {
+    "phase": "starting",
+    "current_document_index": 0,
+    "total_documents": 0,
+    "current_document_name": "",
+    "chunks_parsed": 0,
+    "total_chunks": 0,
+    "current_batch": 0,
+    "total_batches": 0,
+    "chunks_indexed": 0,
+    "status_message": "Preparing upload and indexing...",
+  }
+
+  progress_status = st.empty()
+  progress_details = st.empty()
+  progress_bar = st.progress(0)
+
+  def _update_progress(status: dict):
+    st.session_state.indexing_status = status
+    progress_status.markdown(f"**{status.get('status_message', 'Working...')}**")
+
+    current_document = status.get("current_document_index", 0)
+    total_documents = status.get("total_documents", 0)
+    current_document_name = status.get("current_document_name", "")
+    chunks_indexed = status.get("chunks_indexed", 0)
+    total_chunks = status.get("total_chunks", 0)
+    current_batch = status.get("current_batch", 0)
+    total_batches = status.get("total_batches", 0)
+
+    progress_details.markdown(
+      f"**Document:** {current_document}/{total_documents} {f'– {current_document_name}' if current_document_name else ''}  \n"
+      f"**Chunks:** {chunks_indexed}/{total_chunks} (Batch {current_batch}/{total_batches})"
+    )
+
+    if total_chunks > 0:
+      progress_bar.progress(min(max(chunks_indexed / total_chunks, 0.0), 1.0))
+
   # Process each uploaded file
   for uploaded_file in uploaded_files:
     try:
@@ -95,13 +132,17 @@ def _process_files(uploaded_files, clearance_level):
       st.error(f"Error saving {uploaded_file.name}: {str(e)}")
       error_count += 1
 
-  with st.spinner("Updating database..."):
-    try:
-      st.session_state.indexAgent.invoke(path = UPLOAD_DIR, configuration = st.session_state.baseConfig, clearance_level=selected_clearance)
-      st.success("Database has been updated.")
-    except Exception as e:
-      st.error(f"Error updating database: {str(e)}")
-    
+  try:
+    st.session_state.indexAgent.invoke(
+      path=UPLOAD_DIR,
+      configuration=st.session_state.baseConfig,
+      clearance_level=clearance_level,
+      progress_callback=_update_progress,
+    )
+    st.success("Database has been updated.")
+  except Exception as e:
+    st.error(f"Error updating database: {str(e)}")
+  finally:
     for file in os.listdir(UPLOAD_DIR):
       file_path = os.path.join(UPLOAD_DIR, file)
       os.remove(file_path)
@@ -211,6 +252,8 @@ if uploaded_files is not None and len(uploaded_files) > 0:
     help=button_help,)
   if uploadButton:
     _process_files(uploaded_files, selected_clearance)
+
+st.divider()
 
 # Display existing documents using st.status
 for clearance, files in get_existing_documents(user_clearance).items():

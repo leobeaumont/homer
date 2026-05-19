@@ -2,7 +2,7 @@
 All agents wrappers
 """
 
-from typing import Literal, Any, Dict, Optional
+from typing import Callable, Literal, Any, Dict, Optional
 
 from langchain_core.messages.human import HumanMessage
 from langchain_core.messages import AnyMessage
@@ -92,8 +92,21 @@ class IndexAgent(BaseAgent):
   def __init__(self):
     super().__init__(get_index_graph()) # Compile the retrieval agent graph
 
-  def invoke(self, path: str, configuration: Configuration, clearance_level: str):
-    self._graph.invoke(input={"path": path, "clearance_level": clearance_level}, config = {"configurable": configuration.asdict()})
+  def invoke(
+    self,
+    path: str,
+    configuration: Configuration,
+    clearance_level: str,
+    progress_callback: Optional[Callable[[dict], None]] = None,
+  ):
+    config_data = configuration.asdict()
+    if progress_callback is not None:
+      config_data["progress_callback"] = progress_callback
+
+    self._graph.invoke(
+      input={"path": path, "clearance_level": clearance_level},
+      config={"configurable": config_data},
+    )
 
 
 ################################ Report Agent #################################
