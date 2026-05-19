@@ -18,10 +18,11 @@ def get_connection() -> sqlite3.Connection:
 from chromadb import HttpClient, PersistentClient
 import streamlit as st
 import logging
+from typing import Union
 
 logger = logging.getLogger(__name__)
 
-def get_chroma_client() -> HttpClient | PersistentClient:
+def get_chroma_client() -> Union[HttpClient, PersistentClient]:
   endpoint = st.session_state.baseConfig.database_endpoint
 
   try:
