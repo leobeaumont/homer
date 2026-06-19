@@ -4,15 +4,24 @@ This page collects a writing task from the user and runs the
 ``qmix_report_writer`` handcrafted pipeline (via ``core.qmix_integration``).
 The pipeline retrieves from the RAG store matching the user's clearance level,
 generates a markdown report, and (optionally) compiles it to PDF.
+
+Generation runs in a background thread whose handles live in ``st.session_state``
+(which persists across page navigation within a session). This lets the page
+reattach to an in-flight run when the user navigates away and back, and prevents
+starting a second report while one is still running.
 """
 
 
 import streamlit as st
 
+import threading
+import time
+
 from pathlib import Path
 
-from core.configuration import load_config
+from core.configuration import Configuration, load_config
 from core.qmix_integration import (
+  ReportProgress,
   delete_report,
   generate_report,
   list_reports,
@@ -32,34 +41,111 @@ st.set_page_config(
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
 
+# In-flight run handles (persist across page switches within the session).
+st.session_state.setdefault("report_thread", None)      # threading.Thread | None
+st.session_state.setdefault("report_progress", None)    # ReportProgress | None
+st.session_state.setdefault("report_box", None)          # dict with result/error
+st.session_state.setdefault("report_query", None)        # task being generated
+st.session_state.setdefault("report_last", None)         # finished result to show
+
 
 ############################## Private methods ##############################
 
 
-def _create_report(query: str, export_pdf: bool):
-  user_clearance = st.session_state.baseConfig.clearance_level
+def _is_running() -> bool:
+  thread = st.session_state.report_thread
+  return thread is not None and thread.is_alive()
 
-  result = generate_report(
-    task=query,
-    clearance=user_clearance,
-    config=st.session_state.baseConfig,
-    export_pdf=export_pdf,
-  )
 
-  markdown = result["markdown"]
+def _start_report(query: str, export_pdf: bool):
+  """Launch generation in a background thread, storing handles in session state."""
+  # Snapshot the configuration so later sidebar edits (on any page) cannot mutate
+  # the config mid-run; the worker must not touch st.session_state itself.
+  config = Configuration(**st.session_state.baseConfig.asdict())
+  clearance = config.clearance_level
+
+  progress = ReportProgress()
+  box: dict = {}
+
+  def _worker():
+    try:
+      box["result"] = generate_report(
+        task=query,
+        clearance=clearance,
+        config=config,
+        export_pdf=export_pdf,
+        progress=progress,
+      )
+    except Exception as e:  # surfaced on the main thread when harvested
+      box["error"] = e
+
+  thread = threading.Thread(target=_worker, daemon=True)
+  st.session_state.report_progress = progress
+  st.session_state.report_box = box
+  st.session_state.report_query = query
+  st.session_state.report_last = None
+  st.session_state.report_thread = thread
+  thread.start()
+
+
+def _harvest_if_done():
+  """If the worker finished, move its result/error into report_last and clear handles."""
+  thread = st.session_state.report_thread
+  if thread is None or thread.is_alive():
+    return
+  box = st.session_state.report_box or {}
+  if "error" in box:
+    st.session_state.report_last = {"error": str(box["error"]), "query": st.session_state.report_query}
+  elif "result" in box:
+    result = dict(box["result"])
+    result["query"] = st.session_state.report_query
+    st.session_state.report_last = result
+  st.session_state.report_thread = None
+  st.session_state.report_box = None
+  st.session_state.report_progress = None
+
+
+def _poll_progress_until_done():
+  """Animate the two round bars until the worker thread completes."""
+  progress = st.session_state.report_progress
+  thread = st.session_state.report_thread
+
+  gen_label = st.empty()
+  gen_bar = st.progress(0.0)
+  rev_label = st.empty()
+  rev_bar = st.progress(0.0)
+
+  def _render(snap):
+    gen_label.markdown(f"**Generation** — {snap['gen_label']}")
+    gen_bar.progress(1.0 if snap["gen_finished"] else snap["gen_frac"])
+    rev_label.markdown(f"**Review** — {snap['review_label']}")
+    rev_bar.progress(snap["review_frac"])
+
+  while thread is not None and thread.is_alive():
+    _render(progress.snapshot())
+    time.sleep(0.4)
+  _render(progress.snapshot())
+
+
+def _render_result(last: dict, export_pdf: bool):
+  """Render a finished run's result (or error) inline."""
+  if "error" in last:
+    st.error(f"Error generating the report: {last['error']}")
+    st.info("Please check the logs for more details.")
+    return
+
+  markdown = last.get("markdown") or ""
   if not markdown:
     st.error("No report content was generated.")
     return
 
-  st.success(f"Report generated successfully! ({result['tokens']} tokens)")
-  if result["run_dir"]:
-    st.info(f"Artifacts saved to: {result['run_dir']}")
+  st.success(f"Report generated successfully! ({last['tokens']} tokens)")
+  if last.get("run_dir"):
+    st.info(f"Artifacts saved to: {last['run_dir']}")
 
-  # Render the markdown report inline.
   st.markdown(markdown)
 
-  # Offer the PDF for download when it was produced.
-  pdf_path = result["pdf_path"]
+  pdf_path = last.get("pdf_path")
   if pdf_path and Path(pdf_path).exists():
     with open(pdf_path, "rb") as pdf_file:
       st.download_button(
@@ -115,6 +201,11 @@ exportPdfButton = st.sidebar.toggle(
 ##################################### Page ####################################
 
 
+# Reattach point: if a previously launched run has finished (possibly while the
+# user was on another page), harvest its result before rendering.
+_harvest_if_done()
+running = _is_running()
+
 st.title("Report Generator")
 
 # Browse previously generated reports (read from disk, so they persist across
@@ -142,7 +233,8 @@ with st.expander(f"Generated reports ({len(reports)})", expanded=False):
           st.error(f"Could not open folder: {e}")
 
     with col_del:
-      if st.button("🗑️", key=f"del_{report_info['name']}", help="Delete this report"):
+      if st.button("🗑️", key=f"del_{report_info['name']}", help="Delete this report",
+                   disabled=running):
         try:
           delete_report(report_info["path"], st.session_state.baseConfig)
           st.rerun()
@@ -150,19 +242,33 @@ with st.expander(f"Generated reports ({len(reports)})", expanded=False):
           st.error(f"Could not delete: {e}")
 
 
-# Create the query input area
-query = st.chat_input(placeholder="Enter your report task:")
+# Query input — disabled while a generation is in progress so a second report
+# cannot be started concurrently.
+query = st.chat_input(
+  placeholder="Generating… please wait" if running else "Enter your report task:",
+  disabled=running,
+)
 
-if query:
-  # Display user query
+if running:
+  # Reattach to (or continue tracking) the in-flight run. Navigating away
+  # interrupts this loop but the worker thread keeps running; coming back lands
+  # here again and resumes the bars from the shared progress state.
+  st.info("A report is being generated. You can leave this page — it keeps "
+          "running, and you'll find it here (and in the list above) when it's done.")
   with st.chat_message("user"):
-    st.write(query)
-
-  # Generate report with progress tracking
+    st.write(st.session_state.report_query)
   with st.chat_message("assistant"):
-    with st.spinner("Generating report... this can take several minutes."):
-      try:
-        _create_report(query=query, export_pdf=exportPdfButton)
-      except Exception as e:
-        st.error(f"Error generating the report: {str(e)}")
-        st.info("Please check the logs for more details.")
+    _poll_progress_until_done()
+  _harvest_if_done()
+  st.rerun()
+
+elif query:
+  _start_report(query=query, export_pdf=exportPdfButton)
+  st.rerun()
+
+elif st.session_state.report_last:
+  last = st.session_state.report_last
+  with st.chat_message("user"):
+    st.write(last.get("query", ""))
+  with st.chat_message("assistant"):
+    _render_result(last, export_pdf=exportPdfButton)

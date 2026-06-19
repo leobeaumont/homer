@@ -36,10 +36,14 @@ call. The qmix report agents route their calls through
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import shutil
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from core.configuration import Configuration
 
@@ -405,6 +409,225 @@ def answer_query(
 
 
 # ---------------------------------------------------------------------------
+# Report generation — round progress tracking
+# ---------------------------------------------------------------------------
+#
+# The qmix handcrafted pipeline drives two tqdm bars in
+# handcrafted_graph.graph: one "Writing report" bar (PLANNING → RESEARCH →
+# DRAFTING rounds) and one bar *per validation pass* ("Review & correction",
+# then "Re-review (pass N/M)"). We surface those as two HOMER progress bars by
+# swapping that module's ``tqdm`` for a drop-in that forwards round counts into
+# a thread-safe ReportProgress, which the Streamlit page polls while generation
+# runs in a background thread.
+
+
+class ReportProgress:
+    """Thread-safe snapshot of generation/review round progress.
+
+    Shared between the qmix worker thread (writer, via _ProgressTqdm) and the
+    Streamlit thread (reader, via :meth:`snapshot`).
+    """
+
+    def __init__(self, max_review_passes: int = 2):
+        self._lock = threading.Lock()
+        self.max_review_passes = max_review_passes
+        # Generation (writing) bar.
+        self.gen_total = 0
+        self.gen_done = 0
+        self.gen_detail = ""
+        self.gen_finished = False
+        # Review bar — review_pass is 0 until the first review pass starts.
+        self.review_pass = 0
+        self.review_total = 0
+        self.review_done = 0
+        self.review_detail = ""
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            gen_frac = (self.gen_done / self.gen_total) if self.gen_total else 0.0
+            rev_frac = (self.review_done / self.review_total) if self.review_total else 0.0
+            if self.review_pass == 0:
+                review_label = "Reviews (pending)"
+            else:
+                review_label = f"Review {self.review_pass}/{self.max_review_passes}"
+                if self.review_detail:
+                    review_label += f" — {self.review_detail}"
+            return {
+                "gen_frac": min(max(gen_frac, 0.0), 1.0),
+                "gen_label": self.gen_detail or "Generating report…",
+                "gen_finished": self.gen_finished,
+                "review_pass": self.review_pass,
+                "review_frac": min(max(rev_frac, 0.0), 1.0),
+                "review_label": review_label,
+            }
+
+    # -- mutators called by _ProgressTqdm --------------------------------
+    def start_gen(self, total):
+        with self._lock:
+            self.gen_total = total or 0
+            self.gen_done = 0
+
+    def set_gen_total(self, total):
+        with self._lock:
+            self.gen_total = max(total or 0, 0)
+
+    def update_gen(self, n):
+        with self._lock:
+            self.gen_done += n
+
+    def set_gen_detail(self, detail):
+        with self._lock:
+            self.gen_detail = detail
+
+    def finish_gen(self):
+        with self._lock:
+            if self.gen_total:
+                self.gen_done = self.gen_total
+            self.gen_finished = True
+
+    def start_review(self, total, pass_no, max_passes):
+        with self._lock:
+            self.review_pass = pass_no
+            if max_passes:
+                self.max_review_passes = max_passes
+            self.review_total = total or 0
+            self.review_done = 0
+            self.review_detail = ""
+
+    def set_review_total(self, total):
+        with self._lock:
+            self.review_total = max(total or 0, 0)
+
+    def update_review(self, n):
+        with self._lock:
+            self.review_done += n
+
+    def set_review_detail(self, detail):
+        with self._lock:
+            self.review_detail = detail
+
+
+# Active progress sink + saved original tqdm, set for the duration of a run.
+_active_progress: Optional[ReportProgress] = None
+_orig_tqdm = None
+
+# Guards the qmix process-wide singletons (ReportState/PhaseState/SourceBuffer)
+# and the global tqdm patch: only one report may be generated at a time.
+_GENERATION_LOCK = threading.Lock()
+
+
+class ReportBusyError(RuntimeError):
+    """Raised when a report generation is requested while one is already running."""
+
+_REVIEW_PASS_RE = re.compile(r"pass\s+(\d+)/(\d+)", re.IGNORECASE)
+
+
+class _ProgressTqdm:
+    """Minimal drop-in for tqdm that forwards round progress to _active_progress.
+
+    Implements only the surface the handcrafted graph uses: construction with
+    ``total``/``desc``, ``total`` get/set, ``update``, ``set_description``,
+    ``refresh``, ``close``, and the ``write`` classmethod. Bars are categorised
+    by their construction ``desc`` ("Writing report" → generation; "Review &
+    correction"/"Re-review …" → review; anything else, e.g. the inner "Agents"
+    bar → ignored).
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._prog = _active_progress
+        total = kwargs.get("total", args[0] if args else None)
+        desc = kwargs.get("desc", "") or ""
+        self._total = total
+        self._cat = "inner"
+        if self._prog is None:
+            return
+        if desc == "Writing report":
+            self._cat = "gen"
+            self._prog.start_gen(total)
+        elif desc.startswith("Review & correction") or desc.startswith("Re-review"):
+            self._cat = "review"
+            m = _REVIEW_PASS_RE.search(desc)
+            if m:
+                pass_no, max_passes = int(m.group(1)), int(m.group(2))
+            else:
+                pass_no, max_passes = self._prog.review_pass + 1, None
+            self._prog.start_review(total, pass_no, max_passes)
+
+    @property
+    def total(self):
+        return self._total
+
+    @total.setter
+    def total(self, value):
+        self._total = value
+        if self._prog is None:
+            return
+        if self._cat == "gen":
+            self._prog.set_gen_total(value)
+        elif self._cat == "review":
+            self._prog.set_review_total(value)
+
+    def update(self, n=1):
+        if self._prog is None:
+            return
+        if self._cat == "gen":
+            self._prog.update_gen(n)
+        elif self._cat == "review":
+            self._prog.update_review(n)
+
+    def set_description(self, desc=None, refresh=True):
+        if self._prog is None or not desc:
+            return
+        if self._cat == "gen":
+            self._prog.set_gen_detail(desc)
+        elif self._cat == "review":
+            self._prog.set_review_detail(desc)
+
+    set_description_str = set_description
+
+    def refresh(self):
+        pass
+
+    def close(self):
+        if self._prog is not None and self._cat == "gen":
+            self._prog.finish_gen()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    @classmethod
+    def write(cls, *args, **kwargs):
+        # qmix uses tqdm.write for between-phase notices; route them to logging.
+        if args:
+            logger.info(str(args[0]).strip())
+
+
+def _install_progress(progress: ReportProgress) -> None:
+    """Route the handcrafted graph's tqdm bars into ``progress``."""
+    global _active_progress, _orig_tqdm
+    import qmix_report_writer.handcrafted_graph.graph as g
+
+    _active_progress = progress
+    _orig_tqdm = g.tqdm
+    g.tqdm = _ProgressTqdm
+
+
+def _restore_progress() -> None:
+    """Undo :func:`_install_progress`."""
+    global _active_progress, _orig_tqdm
+    import qmix_report_writer.handcrafted_graph.graph as g
+
+    if _orig_tqdm is not None:
+        g.tqdm = _orig_tqdm
+    _orig_tqdm = None
+    _active_progress = None
+
+
+# ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
 
@@ -425,6 +648,7 @@ def generate_report(
     clearance: str,
     config: Configuration,
     export_pdf: bool = True,
+    progress: Optional[ReportProgress] = None,
 ) -> dict:
     """Generate a report with the qmix handcrafted pipeline over ``clearance``.
 
@@ -433,37 +657,57 @@ def generate_report(
     ``user_data/qmix/output/<timestamp>_<slug>/`` (report_raw.md, report.tex,
     report.pdf).
 
+    If ``progress`` is given, generation/review round progress is reported into
+    it (typically while this runs in a background thread and the UI polls it).
+
+    Only one generation may run at a time (the qmix pipeline uses process-wide
+    singletons); a concurrent call raises :class:`ReportBusyError`.
+
     Returns a dict: ``markdown``, ``tokens``, ``run_dir``, ``pdf_path``
     (``pdf_path`` is None when PDF export was skipped or failed).
     """
     from qmix_report_writer import run_handcrafted
 
     _validate_level(clearance)
-    _configure(config, clearance)
 
-    answers, total_tokens = asyncio.run(
-        run_handcrafted(
-            task=task,
-            llm_name=config.qmix_model,
-            save_output=True,
-            export_pdf=export_pdf,
+    if not _GENERATION_LOCK.acquire(blocking=False):
+        raise ReportBusyError(
+            "A report is already being generated; please wait for it to finish."
         )
-    )
+    try:
+        _configure(config, clearance)
 
-    markdown = answers[0] if answers else ""
-    run_dir = _latest_run_dir()
-    pdf_path = None
-    if run_dir is not None:
-        candidate = run_dir / "report.pdf"
-        if candidate.exists():
-            pdf_path = candidate
+        if progress is not None:
+            _install_progress(progress)
+        try:
+            answers, total_tokens = asyncio.run(
+                run_handcrafted(
+                    task=task,
+                    llm_name=config.qmix_model,
+                    save_output=True,
+                    export_pdf=export_pdf,
+                )
+            )
+        finally:
+            if progress is not None:
+                _restore_progress()
 
-    return {
-        "markdown": markdown,
-        "tokens": total_tokens,
-        "run_dir": str(run_dir) if run_dir else None,
-        "pdf_path": str(pdf_path) if pdf_path else None,
-    }
+        markdown = answers[0] if answers else ""
+        run_dir = _latest_run_dir()
+        pdf_path = None
+        if run_dir is not None:
+            candidate = run_dir / "report.pdf"
+            if candidate.exists():
+                pdf_path = candidate
+
+        return {
+            "markdown": markdown,
+            "tokens": total_tokens,
+            "run_dir": str(run_dir) if run_dir else None,
+            "pdf_path": str(pdf_path) if pdf_path else None,
+        }
+    finally:
+        _GENERATION_LOCK.release()
 
 
 # ---------------------------------------------------------------------------
