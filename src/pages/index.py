@@ -4,10 +4,15 @@ import os
 from pathlib import Path
 
 from core.configuration import load_config
-from core.agents import IndexAgent
-from core.retrieval import delete_documents, get_existing_documents, _CLEARANCE_LEVELS
-from constant import UPLOAD_DIR, VECTORSTORE_DIR
-from pages.utils import is_chromadb_client_available, is_ollama_client_available, is_connected
+from core.qmix_integration import (
+  CLEARANCE_LEVELS as _CLEARANCE_LEVELS,
+  clear_visible_documents,
+  delete_document,
+  ingest_document,
+  list_documents,
+)
+from constant import UPLOAD_DIR
+from pages.utils import is_ollama_client_available, is_connected
 
 ############################## Initialize session state ##############################
 
@@ -18,8 +23,6 @@ st.set_page_config(
 
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
-if "indexAgent" not in st.session_state:
-  st.session_state.indexAgent = IndexAgent()
 
 # Define constants
 user_clearance = st.session_state.baseConfig.clearance_level
@@ -63,9 +66,7 @@ def _reset_vector_store():
   with st.spinner("Updating database..."):
       try:
         user_clearance = st.session_state.baseConfig.clearance_level
-        documents = get_existing_documents(clearance_level=user_clearance)
-        for doc in documents:
-          delete_documents(docs=doc, clearance_level=user_clearance)
+        clear_visible_documents(clearance=user_clearance, config=st.session_state.baseConfig)
       except Exception as e:
         st.error(f"Error clearing database: {str(e)}")
       else:
@@ -75,91 +76,49 @@ def _reset_vector_store():
 def _process_files(uploaded_files, clearance_level):
   success_count = 0
   error_count = 0
-  st.session_state.indexing_status = {
-    "phase": "starting",
-    "current_document_index": 0,
-    "total_documents": 0,
-    "current_document_name": "",
-    "chunks_parsed": 0,
-    "total_chunks": 0,
-    "current_batch": 0,
-    "total_batches": 0,
-    "chunks_indexed": 0,
-    "status_message": "Preparing upload and indexing...",
-  }
 
   progress_status = st.empty()
-  progress_details = st.empty()
   progress_bar = st.progress(0)
 
-  def _update_progress(status: dict):
-    st.session_state.indexing_status = status
-    progress_status.markdown(f"**{status.get('status_message', 'Working...')}**")
-
-    current_document = status.get("current_document_index", 0)
-    total_documents = status.get("total_documents", 0)
-    current_document_name = status.get("current_document_name", "")
-    chunks_indexed = status.get("chunks_indexed", 0)
-    total_chunks = status.get("total_chunks", 0)
-    current_batch = status.get("current_batch", 0)
-    total_batches = status.get("total_batches", 0)
-
-    progress_details.markdown(
-      f"**Document:** {current_document}/{total_documents} {f'– {current_document_name}' if current_document_name else ''}  \n"
-      f"**Chunks:** {chunks_indexed}/{total_chunks} (Batch {current_batch}/{total_batches})"
-    )
-
-    if total_chunks > 0:
-      progress_bar.progress(min(max(chunks_indexed / total_chunks, 0.0), 1.0))
-
-  # Process each uploaded file
-  for uploaded_file in uploaded_files:
-    try:
-      # Check if the file is a PDF
-      if uploaded_file.name.lower().endswith('.pdf'):
-        # Save the file to the selected category directory
-        save_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
-        
-        with open(save_path, "wb") as f:
-          f.write(uploaded_file.getbuffer())
-        
-        success_count += 1
-      else:
-        st.warning(f"Skipped {uploaded_file.name} - not a PDF file")
-        error_count += 1
-        
-    except Exception as e:
-      st.error(f"Error saving {uploaded_file.name}: {str(e)}")
+  # qmix ingests one document at a time, so progress is tracked per document.
+  pdf_files = [f for f in uploaded_files if f.name.lower().endswith('.pdf')]
+  for f in uploaded_files:
+    if not f.name.lower().endswith('.pdf'):
+      st.warning(f"Skipped {f.name} - not a PDF file")
       error_count += 1
 
-  try:
-    st.session_state.indexAgent.invoke(
-      path=UPLOAD_DIR,
-      configuration=st.session_state.baseConfig,
-      clearance_level=clearance_level,
-      progress_callback=_update_progress,
-    )
-    st.success("Database has been updated.")
-  except Exception as e:
-    st.error(f"Error updating database: {str(e)}")
-  finally:
-    for file in os.listdir(UPLOAD_DIR):
-      file_path = os.path.join(UPLOAD_DIR, file)
-      os.remove(file_path)
-  
-  # Show results
+  total = len(pdf_files)
+  for idx, uploaded_file in enumerate(pdf_files, start=1):
+    save_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
+    progress_status.markdown(f"**Indexing {idx}/{total} – {uploaded_file.name}**")
+    try:
+      with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+      ingest_document(
+        file_path=save_path,
+        required_clearance=clearance_level,
+        config=st.session_state.baseConfig,
+      )
+      success_count += 1
+    except Exception as e:
+      st.error(f"Error indexing {uploaded_file.name}: {str(e)}")
+      error_count += 1
+    finally:
+      if os.path.exists(save_path):
+        os.remove(save_path)
+      progress_bar.progress(min(idx / total, 1.0) if total else 1.0)
+
+  if success_count > 0:
+    st.success(f"Database has been updated ({success_count} document(s) indexed).")
   if error_count > 0:
-    st.warning(f"Failed to upload {error_count} file(s)")
+    st.warning(f"Failed to index {error_count} file(s)")
 
 
 ############################## Sidebar ##############################
 
 
-if is_chromadb_client_available():
-  st.sidebar.write(f"Connected to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
-else:
-  st.sidebar.warning(f"Could not connect to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
-  st.sidebar.write(f"Using local ChromaDB in: {VECTORSTORE_DIR}")
+st.sidebar.write("Using local qmix ChromaDB store (per clearance level).")
 
 st.sidebar.divider()
 
@@ -256,7 +215,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
 st.divider()
 
 # Display existing documents using st.status
-for clearance, files in get_existing_documents(user_clearance).items():
+for clearance, files in list_documents(user_clearance, st.session_state.baseConfig).items():
   if files:
     label = f"{clearance.replace('_', ' ')}"
 
@@ -265,14 +224,14 @@ for clearance, files in get_existing_documents(user_clearance).items():
     with st.status(label, state=state, expanded=True):
       for file in files:
         col1, col2 = st.columns([0.9, 0.1])
-        
+
         with col1:
           st.markdown(f"📄 {Path(file).stem}")
-        
+
         with col2:
           if st.button("🗑️", key=f"del_{clearance}_{file}"):
             try:
-              delete_documents(docs=file, clearance_level=user_clearance)
+              delete_document(source_name=file, config=st.session_state.baseConfig)
               st.rerun()
             except Exception as e:
               st.error(f"Error: {str(e)}")

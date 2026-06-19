@@ -1,22 +1,19 @@
-"""Streamlit page to generate reports based on user queries.
+"""Streamlit page to generate reports with the qmix report engine.
 
-This page allows users to input queries, generates reports using the
-ReportAgent, and provides options to download the generated reports in PDF
-format.
+This page collects a writing task from the user and runs the
+``qmix_report_writer`` handcrafted pipeline (via ``core.qmix_integration``).
+The pipeline retrieves from the RAG store matching the user's clearance level,
+generates a markdown report, and (optionally) compiles it to PDF.
 """
 
 
 import streamlit as st
-import json
 
 from pathlib import Path
-from datetime import datetime
 
-from core.agents import ReportAgent
-from core.configuration import load_config, Configuration, CONFIG_PATH
-from utils.converter import dict_to_pdf
-from pages.utils import is_chromadb_client_available, is_ollama_client_available, is_connected
-from constant import OUTPUT_DIR, VECTORSTORE_DIR
+from core.configuration import load_config
+from core.qmix_integration import generate_report
+from pages.utils import is_ollama_client_available, is_connected
 
 
 ################################ Initialization ###############################
@@ -29,164 +26,93 @@ st.set_page_config(
 
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
-if "reportAgent" not in st.session_state:
-  st.session_state.reportAgent = ReportAgent()
 if "report_history" not in st.session_state:
   st.session_state.report_history = []
-  
+
 
 ############################## Private methods ##############################
 
 
-def _create_report(query:str):
-  # Create a unique filename
-  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-  filename = f"report_{timestamp}.pdf"
-  output_path = Path(OUTPUT_DIR) / filename
-  
-  # Ensure output directory exists
-  Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-  
-  # Generate the report
-  output, header = st.session_state.reportAgent.invoke(
-    query=query,
-    configuration=st.session_state.baseConfig,
+def _create_report(query: str, export_pdf: bool):
+  user_clearance = st.session_state.baseConfig.clearance_level
+
+  result = generate_report(
+    task=query,
+    clearance=user_clearance,
+    config=st.session_state.baseConfig,
+    export_pdf=export_pdf,
   )
 
-  if output and header:
-    
-    # Generate PDF
-    with st.spinner("Creating PDF..."):
-      pdf_path = dict_to_pdf(
-        data = output,
-        output_filename = filename,
-        output_dir = OUTPUT_DIR,
-        header = header
-      )
-    
-    # Success message
-    st.success(f"Report generated successfully!")
-    st.info(f"Saved to: {pdf_path}")
-    
-    # Add to history
-    st.session_state.report_history.append({
-      "query": query,
-      "timestamp": timestamp,
-      "path": str(output_path)
-    })
-    
-    # Offer download
-    with open(output_path, "rb") as pdf_file:
+  markdown = result["markdown"]
+  if not markdown:
+    st.error("No report content was generated.")
+    return
+
+  st.success(f"Report generated successfully! ({result['tokens']} tokens)")
+  if result["run_dir"]:
+    st.info(f"Artifacts saved to: {result['run_dir']}")
+
+  # Record in the session history.
+  st.session_state.report_history.append({
+    "query": query,
+    "run_dir": result["run_dir"],
+  })
+
+  # Render the markdown report inline.
+  st.markdown(markdown)
+
+  # Offer the PDF for download when it was produced.
+  pdf_path = result["pdf_path"]
+  if pdf_path and Path(pdf_path).exists():
+    with open(pdf_path, "rb") as pdf_file:
       st.download_button(
-        label="Download Report",
+        label="Download PDF",
         data=pdf_file.read(),
-        file_name=filename,
-        mime="application/pdf"
+        file_name=Path(pdf_path).name,
+        mime="application/pdf",
       )
-      # TODO: maybe remove the file from the user_data folder if it is
-      # downloaded?
-  else:
-    st.error(f"No report content was generated: output:{output}")
+  elif export_pdf:
+    st.warning("PDF export was requested but no PDF was produced (see logs). "
+               "The markdown report is shown above.")
 
 
 ################################### Sidebar ###################################
 
 
-# Check ChromaDB connection
-if is_chromadb_client_available():
-  st.sidebar.write(f"Connected to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
-else:
-  st.sidebar.warning(f"Could not connect to ChromaDB at: {st.session_state.baseConfig.database_endpoint}")
-  st.sidebar.write(f"Using local ChromaDB in: {VECTORSTORE_DIR}")
+st.sidebar.write("Using local qmix ChromaDB store (per clearance level).")
 
 st.sidebar.divider()
 
-# Connection button
+# Connection button: choose which Ollama host the qmix pipeline targets.
 connectionButton = st.sidebar.toggle(
-  label = "Server execution",
-  value = is_connected(st.session_state),
+  label="Server execution",
+  value=is_connected(st.session_state),
   key="reportConnectionButton"
 )
 
-# Configure server host based on connection preference
 if connectionButton:
-  conn = is_ollama_client_available(st.session_state.baseConfig.ollama_distant)
-  if conn:
+  if is_ollama_client_available(st.session_state.baseConfig.ollama_distant):
     st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_distant
-    st.session_state.baseConfig.report_model = st.session_state.baseConfig.server_standard
   else:
-    st.sidebar.warning(f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local")
+    st.sidebar.warning(
+      f"Could not connect to {st.session_state.baseConfig.ollama_distant}, falling back to local"
+    )
     st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
-    st.session_state.baseConfig.report_model = st.session_state.baseConfig.local_standard
 else:
-  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local 
-  st.session_state.baseConfig.report_model = st.session_state.baseConfig.local_standard
+  st.session_state.baseConfig.ollama_host = st.session_state.baseConfig.ollama_local
 
 st.sidebar.write(f"Connected to: {st.session_state.baseConfig.ollama_host}")
-
-st.sidebar.info(f"Using model: {st.session_state.baseConfig.report_model}")
-
-st.sidebar.divider()
-
-# Writing style buttons
-writingControl = st.sidebar.segmented_control(
-  label="Writing style",
-  options=["general","technical"],
-  default=st.session_state.baseConfig.writing_style,
-)
-
-if writingControl == "technical":
-  st.sidebar.info(
-    "This mode is designed to generate detailed technical sections strictly based on the retrieved context.\n\n"
-    "Use this mode when your audience expects precision, completeness, and domain accuracy."
-  )
-else:
-  st.sidebar.info(
-    "This mode focuses on producing accessible and informative content using the available context.\n\n"
-    "Use this mode when aiming for clarity and synthesis for a broader audience."
-  )
+st.sidebar.info(f"Report model: {st.session_state.baseConfig.qmix_model}")
 
 st.sidebar.divider()
 
-# Number of parts slider
-numberOfPartsSlider = st.sidebar.slider(
-  label="Number of parts",
-  min_value=1,
-  max_value=10,
-  value=st.session_state.baseConfig.number_of_parts,
+exportPdfButton = st.sidebar.toggle(
+  label="Export PDF",
+  value=True,
+  key="reportExportPdf",
+  help="Compile the generated report to PDF (requires Tectonic on PATH or "
+       "internet access to auto-download it). Disable to keep only markdown.",
 )
-
-st.sidebar.divider()
-
-# Number of parts slider
-retriverKSlider = st.sidebar.slider(
-  label="Number of documents retrieved",
-  min_value=1,
-  max_value=20,
-  value=st.session_state.baseConfig.number_of_documents,
-)
-
-# Update the configuration
-config = Configuration(
-  number_of_parts = numberOfPartsSlider,
-  writing_style = writingControl,
-  number_of_documents = retriverKSlider,
-  ollama_host = st.session_state.baseConfig.ollama_host,
-  ollama_local = st.session_state.baseConfig.ollama_local,
-  ollama_distant = st.session_state.baseConfig.ollama_distant,
-  ocr = st.session_state.baseConfig.ocr,
-  embedding_model = st.session_state.baseConfig.embedding_model,
-  local_reasoning = st.session_state.baseConfig.local_reasoning,
-  local_standard = st.session_state.baseConfig.local_standard,
-  server_reasoning = st.session_state.baseConfig.server_reasoning,
-  server_standard = st.session_state.baseConfig.server_standard,
-  vision_model = st.session_state.baseConfig.vision_model
-)
-
-with open(CONFIG_PATH, "w") as f:
-  json.dump(config.asdict(), f, indent=2)
-
-st.session_state.baseConfig = load_config()
 
 
 ##################################### Page ####################################
@@ -198,29 +124,22 @@ st.title("Report Generator")
 if st.session_state.report_history:
   with st.expander("Previous Reports"):
     for idx, report_info in enumerate(st.session_state.report_history):
-      st.write(
-        f"{idx + 1}. {report_info['query']} - {report_info['timestamp']}")
+      st.write(f"{idx + 1}. {report_info['query']} — {report_info.get('run_dir', '')}")
 
 
 # Create the query input area
-query = st.chat_input(
-  placeholder="Enter your query:",
-  #disabled=True,
-  )
+query = st.chat_input(placeholder="Enter your report task:")
 
 if query:
   # Display user query
   with st.chat_message("user"):
     st.write(query)
-  
+
   # Generate report with progress tracking
   with st.chat_message("assistant"):
-    progress_container = st.container()
-    
-    with progress_container:
-      with st.spinner("Generating report..."):
-        try:
-          _create_report(query=query)              
-        except Exception as e:
-          st.error(f"Error generating the report: {str(e)}")
-          st.info("Please check the logs for more details.")
+    with st.spinner("Generating report... this can take several minutes."):
+      try:
+        _create_report(query=query, export_pdf=exportPdfButton)
+      except Exception as e:
+        st.error(f"Error generating the report: {str(e)}")
+        st.info("Please check the logs for more details.")

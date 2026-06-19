@@ -80,7 +80,16 @@ with st.form("config_form"):
     value=st.session_state.baseConfig.vision_model,
     help="Vision model used to parse pdf, only if connected to server ollama client"
   )
-  
+
+  st.subheader("Report Engine (qmix)")
+
+  qmix_model = st.text_input(
+    "qmix report model",
+    value=st.session_state.baseConfig.qmix_model,
+    help="Ollama model used by the qmix report writer pipeline. Must be served "
+         "by the selected Ollama host along with nomic-embed-text."
+  )
+
 
   submitted = st.form_submit_button("Save Configuration", type="primary")
 
@@ -115,7 +124,8 @@ if submitted:
       local_standard = local_standard_model,
       server_reasoning = server_reasoning_model,
       server_standard = server_standard_model,
-      vision_model = server_vision_model
+      vision_model = server_vision_model,
+      qmix_model = qmix_model
     )
     
     with open(CONFIG_PATH, "w") as f:

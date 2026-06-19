@@ -17,4 +17,5 @@ dependencies = [
   "pymupdf",
   "reportlab",
   "simsimd",
+  "qmix_report_writer @ git+https://github.com/leobeaumont/Q-Mix_report_writer.git@v0.1.0",
 ]

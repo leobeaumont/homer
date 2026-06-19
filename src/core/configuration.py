@@ -63,8 +63,16 @@ class Configuration:
     default = False,
   )
 
-  clearance_level: Literal["PUBLIC", "INTERNAL", "SECRET"] = field(
+  clearance_level: Literal[
+    "PUBLIC", "RESTRICTED", "CONFIDENTIAL", "RESTRICTED_NUC", "CONFIDENTIAL_NUC"
+  ] = field(
     default="PUBLIC",
+  )
+
+  # qmix report engine
+  qmix_model: str = field(
+    # Default mirrors qmix_report_writer's own default (llm.default_model).
+    default = "alibayram/Qwen3-30B-A3B-Instruct-2507",
   )
 
   # Models
