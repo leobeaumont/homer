@@ -12,7 +12,12 @@ import streamlit as st
 from pathlib import Path
 
 from core.configuration import load_config
-from core.qmix_integration import generate_report
+from core.qmix_integration import (
+  delete_report,
+  generate_report,
+  list_reports,
+  open_report_folder,
+)
 from pages.utils import is_ollama_client_available, is_connected
 
 
@@ -26,8 +31,6 @@ st.set_page_config(
 
 if "baseConfig" not in st.session_state:
   st.session_state.baseConfig = load_config()
-if "report_history" not in st.session_state:
-  st.session_state.report_history = []
 
 
 ############################## Private methods ##############################
@@ -51,12 +54,6 @@ def _create_report(query: str, export_pdf: bool):
   st.success(f"Report generated successfully! ({result['tokens']} tokens)")
   if result["run_dir"]:
     st.info(f"Artifacts saved to: {result['run_dir']}")
-
-  # Record in the session history.
-  st.session_state.report_history.append({
-    "query": query,
-    "run_dir": result["run_dir"],
-  })
 
   # Render the markdown report inline.
   st.markdown(markdown)
@@ -120,11 +117,37 @@ exportPdfButton = st.sidebar.toggle(
 
 st.title("Report Generator")
 
-# Display previous reports if any
-if st.session_state.report_history:
-  with st.expander("Previous Reports"):
-    for idx, report_info in enumerate(st.session_state.report_history):
-      st.write(f"{idx + 1}. {report_info['query']} — {report_info.get('run_dir', '')}")
+# Browse previously generated reports (read from disk, so they persist across
+# restarts). Each run can be opened in the file browser or deleted.
+reports = list_reports(st.session_state.baseConfig)
+with st.expander(f"Generated reports ({len(reports)})", expanded=False):
+  if not reports:
+    st.caption("No reports generated yet.")
+  for report_info in reports:
+    col_label, col_open, col_del = st.columns([0.7, 0.16, 0.14])
+
+    with col_label:
+      st.markdown(f"**{report_info['task']}**")
+      meta = report_info["created"] or report_info["name"]
+      if not report_info["has_pdf"]:
+        meta += " · no PDF"
+      st.caption(meta)
+
+    with col_open:
+      if st.button("📂 Open", key=f"open_{report_info['name']}",
+                   help="Open the run folder (raw .md, .tex, logs, .pdf)"):
+        try:
+          open_report_folder(report_info["path"])
+        except Exception as e:
+          st.error(f"Could not open folder: {e}")
+
+    with col_del:
+      if st.button("🗑️", key=f"del_{report_info['name']}", help="Delete this report"):
+        try:
+          delete_report(report_info["path"], st.session_state.baseConfig)
+          st.rerun()
+        except Exception as e:
+          st.error(f"Could not delete: {e}")
 
 
 # Create the query input area

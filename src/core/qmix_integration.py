@@ -36,6 +36,8 @@ call. The qmix report agents route their calls through
 from __future__ import annotations
 
 import asyncio
+import re
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -462,3 +464,100 @@ def generate_report(
         "run_dir": str(run_dir) if run_dir else None,
         "pdf_path": str(pdf_path) if pdf_path else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Report run management (browse / delete / open on disk)
+# ---------------------------------------------------------------------------
+
+# Header comments save_raw_report() writes at the top of report_raw.md.
+_QUERY_RE = re.compile(r"<!--\s*Query:\s*(.*?)\s*-->")
+_GENERATED_RE = re.compile(r"<!--\s*Generated:\s*(.*?)\s*-->")
+
+
+def _reports_dir(config: Configuration) -> Path:
+    """Directory holding one sub-folder per report run.
+
+    Resolved through qmix's ``get_output_dir()`` so it follows the configurable
+    ``output_root`` / ``output_dir`` settings rather than a hard-coded path. The
+    output location is clearance-independent, so any level applies it.
+    """
+    from qmix_report_writer.utils.config import get_output_dir
+
+    _configure(config, "PUBLIC")
+    return get_output_dir()
+
+
+def list_reports(config: Configuration) -> List[dict]:
+    """List generated report runs, newest first.
+
+    Each entry: ``name`` (folder name), ``path``, ``task`` (the original query),
+    ``created`` (ISO timestamp parsed from the run, falls back to folder name),
+    ``has_pdf`` and ``pdf_path``.
+    """
+    root = _reports_dir(config)
+    if not root.exists():
+        return []
+
+    runs: List[dict] = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        task = ""
+        created = ""
+        raw = d / "report_raw.md"
+        if raw.exists():
+            try:
+                head = raw.read_text(encoding="utf-8", errors="replace")[:1000]
+                m = _QUERY_RE.search(head)
+                if m:
+                    task = m.group(1).strip()
+                g = _GENERATED_RE.search(head)
+                if g:
+                    created = g.group(1).strip()
+            except OSError:
+                pass
+        pdf = d / "report.pdf"
+        runs.append({
+            "name": d.name,
+            "path": str(d),
+            "task": task or d.name,
+            "created": created,
+            "mtime": d.stat().st_mtime,
+            "has_pdf": pdf.exists(),
+            "pdf_path": str(pdf) if pdf.exists() else None,
+        })
+
+    runs.sort(key=lambda r: r["mtime"], reverse=True)
+    return runs
+
+
+def delete_report(run_dir: str, config: Configuration) -> bool:
+    """Delete a report run folder (and all its artifacts).
+
+    Refuses to delete anything outside the configured reports directory. Returns
+    True if a folder was removed.
+    """
+    target = Path(run_dir).resolve()
+    root = _reports_dir(config).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"Refusing to delete '{target}' outside the reports directory.")
+    if target.is_dir():
+        shutil.rmtree(target)
+        return True
+    return False
+
+
+def open_report_folder(run_dir: str) -> None:
+    """Open a report run folder in the OS file browser (local app only)."""
+    import os
+    import subprocess
+    import sys
+
+    path = str(Path(run_dir).resolve())
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])

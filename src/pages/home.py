@@ -57,6 +57,6 @@ z-index: 100;
 </style>
 
 <div class="footer">
-Designed by Florent Bergé & Mathieu de la Barre (IMT Atlantique) for SCK CEN
+Designed by Florent Bergé, Mathieu de la Barre and Léo Beaumont (IMT Atlantique) for SCK CEN
 </div>
 """, unsafe_allow_html=True)
