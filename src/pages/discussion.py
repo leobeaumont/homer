@@ -34,10 +34,6 @@ if "discussion_history" not in st.session_state:
 ############################## Sidebar ##############################
 
 
-st.sidebar.write("Using local qmix ChromaDB store (per clearance level).")
-
-st.sidebar.divider()
-
 # Server connection toggle: chooses which Ollama host to target.
 connectionButton = st.sidebar.toggle(
   label="Server execution",

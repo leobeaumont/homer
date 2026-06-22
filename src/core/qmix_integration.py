@@ -36,12 +36,14 @@ call. The qmix report agents route their calls through
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import re
 import shutil
 import threading
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -758,6 +760,156 @@ def generate_report(
         }
     finally:
         _GENERATION_LOCK.release()
+
+
+# ---------------------------------------------------------------------------
+# Active-run registry (survives a browser refresh)
+# ---------------------------------------------------------------------------
+#
+# A browser refresh starts a *new* Streamlit session (st.session_state is wiped)
+# but the *same* server process, so the daemon worker thread keeps running and
+# module-level globals persist. Tracking the active/last run here — rather than
+# in st.session_state — lets any session (after a refresh, or another tab)
+# reattach to a running report, and enforces a single concurrent generation.
+
+# qmix logger names whose output is captured into the per-run log buffer. Child
+# loggers (e.g. "handcrafted_graph.runner") propagate up to these parents, so a
+# handler on the parent captures them too.
+_QMIX_LOG_ROOTS = ["handcrafted_graph", "llm", "graph", "qmix_report_writer"]
+
+
+class _BufferLogHandler(logging.Handler):
+    """Logging handler that appends formatted records to a bounded deque."""
+
+    def __init__(self, buffer: Deque[str]):
+        super().__init__()
+        self.buffer = buffer
+
+    def emit(self, record):
+        try:
+            self.buffer.append(self.format(record))
+        except Exception:
+            pass
+
+
+class ActiveReportRun:
+    """Process-global handle to a report generation (running or just finished).
+
+    Holds the live :class:`ReportProgress` (for the round bars), a bounded log
+    buffer (qmix's debug output, surfaced in the UI instead of only the
+    terminal), and the worker thread + its result.
+    """
+
+    def __init__(self, task: str, clearance: str, export_pdf: bool):
+        self.task = task
+        self.clearance = clearance
+        self.export_pdf = export_pdf
+        self.started_at = time.time()
+        self.progress = ReportProgress()
+        self.log: Deque[str] = collections.deque(maxlen=2000)
+        self.thread: Optional[threading.Thread] = None
+        self._box: dict = {}
+
+    def is_running(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def result(self) -> Optional[dict]:
+        """Finished result dict (with ``query``), an ``{"error": ...}`` dict, or
+        None while still running."""
+        if "result" in self._box:
+            r = dict(self._box["result"])
+            r["query"] = self.task
+            return r
+        if "error" in self._box:
+            return {"error": str(self._box["error"]), "query": self.task}
+        return None
+
+    def log_text(self) -> str:
+        return "\n".join(self.log)
+
+
+_active_run: Optional[ActiveReportRun] = None
+_active_run_lock = threading.Lock()
+
+
+def get_active_run() -> Optional[ActiveReportRun]:
+    """Return the current/last report run (running or finished), or None."""
+    return _active_run
+
+
+def is_report_running() -> bool:
+    return _active_run is not None and _active_run.is_running()
+
+
+def start_report(
+    task: str,
+    clearance: str,
+    config: Configuration,
+    export_pdf: bool = True,
+) -> ActiveReportRun:
+    """Start a report generation in a background thread, tracked process-globally.
+
+    Returns the :class:`ActiveReportRun` handle. Raises :class:`ReportBusyError`
+    if a generation is already running.
+    """
+    global _active_run
+    with _active_run_lock:
+        if _active_run is not None and _active_run.is_running():
+            raise ReportBusyError(
+                "A report is already being generated; please wait for it to finish."
+            )
+
+        _validate_level(clearance)
+        run = ActiveReportRun(task, clearance, export_pdf)
+        # Snapshot the config so later sidebar edits cannot mutate a running job.
+        cfg = Configuration(**config.asdict())
+
+        # Capture qmix's logging into the run's buffer (the "easier way" to read
+        # debug output than scrolling the terminal). Terminal logging is left
+        # untouched; we only add a handler.
+        handler = _BufferLogHandler(run.log)
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S")
+        )
+        attached = []
+        for name in _QMIX_LOG_ROOTS:
+            lg = logging.getLogger(name)
+            if lg.level == logging.NOTSET or lg.level > logging.INFO:
+                lg.setLevel(logging.INFO)
+            lg.addHandler(handler)
+            attached.append(lg)
+
+        def _worker():
+            try:
+                run._box["result"] = generate_report(
+                    task=task,
+                    clearance=clearance,
+                    config=cfg,
+                    export_pdf=export_pdf,
+                    progress=run.progress,
+                )
+                # Persist the captured log next to a successful run's artifacts so
+                # it is reachable later via the run folder.
+                res = run._box["result"]
+                run_dir = res.get("run_dir") if isinstance(res, dict) else None
+                if run_dir:
+                    try:
+                        (Path(run_dir) / "run.log").write_text(
+                            run.log_text(), encoding="utf-8"
+                        )
+                    except OSError:
+                        pass
+            except Exception as e:
+                run._box["error"] = e
+            finally:
+                for lg in attached:
+                    lg.removeHandler(handler)
+
+        run.thread = threading.Thread(target=_worker, daemon=True, name="qmix-report")
+        _active_run = run
+        run.thread.start()
+        return run
 
 
 # ---------------------------------------------------------------------------

@@ -118,10 +118,6 @@ def _process_files(uploaded_files, clearance_level):
 ############################## Sidebar ##############################
 
 
-st.sidebar.write("Using local qmix ChromaDB store (per clearance level).")
-
-st.sidebar.divider()
-
 connectionButton = st.sidebar.toggle(
   label = "Server execution",
   value = is_connected(st.session_state),
