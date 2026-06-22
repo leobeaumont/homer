@@ -66,9 +66,10 @@ source ./.venv/bin/activate   # or .\.venv\Scripts\Activate.ps1
 uv sync
 ```
 
-> The `q_mix_report_writer` package (pinned in `requirements.txt` /
-> `pyproject.toml`) pulls in its own dependencies (chromadb, torch, …) on the
-> first install, so expect the initial install to take a while.
+> The report engine, [`qmix-report-writer`](https://pypi.org/project/qmix-report-writer/)
+> (pinned to `==0.1.0` in `requirements.txt` / `pyproject.toml`), is installed
+> from PyPI and pulls in its own dependencies (chromadb, torch, …) on the first
+> install, so expect the initial install to take a while.
 
 ## Running
 
