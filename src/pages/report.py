@@ -134,6 +134,16 @@ def _render_result(last: dict, export_pdf: bool):
     st.info("Please check the logs for more details.")
     return
 
+  # Graceful failure: not enough data in the RAG, or an empty report. No files
+  # were saved for this run.
+  if not last.get("success", True):
+    st.warning(
+      "⚠️ The report could not be generated: the knowledge base does not contain "
+      "enough information on this subject. Try a different topic or add relevant "
+      "documents on the Documents page. (No files were saved.)"
+    )
+    return
+
   markdown = last.get("markdown") or ""
   if not markdown:
     st.error("No report content was generated.")

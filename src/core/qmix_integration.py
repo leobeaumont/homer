@@ -632,15 +632,42 @@ def _restore_progress() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _latest_run_dir() -> Optional[Path]:
-    """Return the most recently created qmix report run folder, if any."""
-    from qmix_report_writer.utils.config import get_output_dir
+def _is_empty_report(markdown: str) -> bool:
+    """True when the pipeline produced no usable report.
 
-    out = get_output_dir()
-    if not out.exists():
-        return None
-    dirs = [p for p in out.iterdir() if p.is_dir()]
-    return max(dirs, key=lambda p: p.stat().st_mtime) if dirs else None
+    Covers a blank result and qmix's "No report generated" sentinel (returned by
+    the graph when the assembled report is empty).
+    """
+    text = (markdown or "").strip()
+    return not text or text.lower() == "no report generated"
+
+
+def _save_report(task: str, markdown: str, export_pdf: bool):
+    """Persist a successful report (mirrors run_handcrafted's own save step).
+
+    Writes report_raw.md into a fresh run folder and, when requested, converts to
+    LaTeX and compiles a PDF. Returns ``(run_dir, pdf_path)`` (pdf_path is None if
+    export was skipped or failed).
+    """
+    from qmix_report_writer.utils.report_export import save_raw_report
+
+    run_dir = save_raw_report(task=task, report=markdown)
+
+    pdf_path = None
+    if export_pdf:
+        try:
+            from qmix_report_writer.utils.markdown_to_latex import convert_run_dir
+            from qmix_report_writer.utils.compile_pdf import compile_run_dir
+
+            convert_run_dir(run_dir)
+            pdf_path = compile_run_dir(run_dir)
+        except Exception as e:
+            logger.warning(f"PDF export failed ({e}). Raw markdown kept at {run_dir}.")
+            pdf_path = None
+
+    if pdf_path is not None and not Path(pdf_path).exists():
+        pdf_path = None
+    return Path(run_dir), pdf_path
 
 
 def generate_report(
@@ -653,9 +680,13 @@ def generate_report(
     """Generate a report with the qmix handcrafted pipeline over ``clearance``.
 
     The pipeline retrieves from (and is restricted to) the cumulative store for
-    ``clearance``. Artifacts are written by qmix under
+    ``clearance``. On success, artifacts are written under
     ``user_data/qmix/output/<timestamp>_<slug>/`` (report_raw.md, report.tex,
     report.pdf).
+
+    Generation runs with saving disabled and the result is persisted here only
+    when it is a real report — so a failed run (the knowledge base lacks relevant
+    data, or the pipeline returns an empty report) writes **no files**.
 
     If ``progress`` is given, generation/review round progress is reported into
     it (typically while this runs in a background thread and the UI polls it).
@@ -663,10 +694,12 @@ def generate_report(
     Only one generation may run at a time (the qmix pipeline uses process-wide
     singletons); a concurrent call raises :class:`ReportBusyError`.
 
-    Returns a dict: ``markdown``, ``tokens``, ``run_dir``, ``pdf_path``
-    (``pdf_path`` is None when PDF export was skipped or failed).
+    Returns a dict with ``success`` (bool). On success: ``markdown``, ``tokens``,
+    ``run_dir``, ``pdf_path``. On failure: ``success=False`` and a ``reason``
+    (``"insufficient_data"`` or ``"empty"``), with no files written.
     """
     from qmix_report_writer import run_handcrafted
+    from qmix_report_writer.handcrafted_graph.graph import NoCorpusCoverageError
 
     _validate_level(clearance)
 
@@ -680,29 +713,46 @@ def generate_report(
         if progress is not None:
             _install_progress(progress)
         try:
+            # save_output=False: nothing is written by the pipeline. We decide
+            # below whether the result is worth persisting.
             answers, total_tokens = asyncio.run(
                 run_handcrafted(
                     task=task,
                     llm_name=config.qmix_model,
-                    save_output=True,
-                    export_pdf=export_pdf,
+                    save_output=False,
+                    export_pdf=False,
                 )
             )
+        except NoCorpusCoverageError:
+            # Early exit: PLANNING found no corpus coverage for this subject.
+            return {
+                "success": False,
+                "reason": "insufficient_data",
+                "markdown": "",
+                "tokens": 0,
+                "run_dir": None,
+                "pdf_path": None,
+            }
         finally:
             if progress is not None:
                 _restore_progress()
 
         markdown = answers[0] if answers else ""
-        run_dir = _latest_run_dir()
-        pdf_path = None
-        if run_dir is not None:
-            candidate = run_dir / "report.pdf"
-            if candidate.exists():
-                pdf_path = candidate
+        if _is_empty_report(markdown):
+            return {
+                "success": False,
+                "reason": "empty",
+                "markdown": "",
+                "tokens": int(total_tokens),
+                "run_dir": None,
+                "pdf_path": None,
+            }
 
+        run_dir, pdf_path = _save_report(task, markdown, export_pdf)
         return {
+            "success": True,
             "markdown": markdown,
-            "tokens": total_tokens,
+            "tokens": int(total_tokens),
             "run_dir": str(run_dir) if run_dir else None,
             "pdf_path": str(pdf_path) if pdf_path else None,
         }
