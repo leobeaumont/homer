@@ -17,5 +17,5 @@ dependencies = [
   "pymupdf",
   "reportlab",
   "simsimd",
-  "qmix-report-writer==0.1.0",
+  "qmix-report-writer==0.1.1",
 ]
