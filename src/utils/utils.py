@@ -133,211 +133,25 @@ def format_messages(messages: Optional[list[AnyMessage]])-> str:
 
 from pathlib import Path
 
-
-def format_sources_markdown(documents: Optional[list[Document]])-> str:
+def format_sources(documents: Optional[list[Document]], strip_extension: bool = False) -> str:
   """
   Convert a list of documents to a markdown list of unique sources.
-  
+
   Args:
-    documents: List of document objects with metadata attribute
-    
+    documents: List of document objects with a metadata attribute.
+    strip_extension: If True, show only the file stem (name without
+      extension); if False, show the full source string.
+
   Returns:
-    str: Markdown formatted list of unique sources, sorted alphabetically
+    str: Markdown list of unique sources, sorted alphabetically, or a
+      placeholder string if there are none.
   """
   if not documents:
     return "No sources available."
-  
-  # Extract unique sources
+
   sources = set()
   for document in documents:
     source = document.metadata.get("source", "unknown")
-    sources.add(source)
-  
-  # Sort and format as markdown
-  sorted_sources = sorted(sources)
-  markdown_lines = [f"- {source}" for source in sorted_sources]
-  
-  return "\n".join(markdown_lines)
+    sources.add(Path(source).stem if strip_extension else source)
 
-
-def format_sources(documents: Optional[list[Document]])-> str:
-  """
-  Convert a list of documents to a string of unique sources.
-  
-  Args:
-    documents: List of document objects with metadata attribute
-    
-  Returns:
-    str: formatted list of unique sources, sorted alphabetically
-  """
-  if not documents:
-    return "No sources available."
-  
-  # Extract unique sources
-  sources = set()
-  for document in documents:
-    source = document.metadata.get("source", "unknown")
-    sources.add(Path(source).stem)
-  
-  # Sort and format as markdown
-  sorted_sources = sorted(sources)
-  sources_lines = [f"- {source}" for source in sorted_sources]
-  
-  return "\n".join(sources_lines)
-
-
-############################# Structured messages #############################
-
-
-from langchain_core.messages import AnyMessage
-
-
-def get_message_text(msg: AnyMessage) -> str:
-  """Get the text content of a message.
-
-  This function extracts the text content from various message formats.
-
-  Args:
-    msg (AnyMessage): The message object to extract text from.
-
-  Returns:
-    str: The extracted text content of the message.
-
-  Examples:
-    >>> from langchain_core.messages import HumanMessage
-    >>> get_message_text(HumanMessage(content="Hello"))
-    'Hello'
-    >>> get_message_text(HumanMessage(content={"text": "World"}))
-    'World'
-    >>> get_message_text(HumanMessage(content=[{"text": "Hello"}, " "]))
-    'Hello'
-  """
-  content = msg.content
-  if not content:
-    return ""
-  if isinstance(content, str):
-    return content
-  if isinstance(content, dict):
-    return content.get("text", "")
-  c = content[0]
-  if isinstance(c, str):
-    txts = [c for c in content]
-  else: 
-    txts = [(c.get("text") or "") for c in content]
-    return "".join(txts).strip()
-
-
-############################### Remove duplicates #############################
-
-
-def remove_duplicates(base: list[str],
-                      new: list[str]) -> list[str]:
-  base_set = set(base)
-  return [item for item in new if item not in base_set]
-
-
-############################# Make document batch #############################
-
-
-from itertools import islice
-from typing import List, TypeVar
-
-T = TypeVar("T")
-
-def make_batch(obj: List[T],
-               size: int = 100) -> List[List[T]]:
-  """
-  Split a list into batches of specified size.
-  
-  Args:
-    documents: List to batch
-    size: Maximum size of each batch (default: 100)
-    
-  Returns:
-    List of batches
-    
-  Raises:
-    ValueError: If size is less than 1
-  """
-  if size < 1:
-    raise ValueError("Batch size must be at least 1")
-  
-  if not obj:
-    return []
-  
-  # Convert to iterator for memory efficiency
-  obj_iter = iter(obj)
-  
-  # Use islice to create batches efficiently
-  batches = []
-  while True:
-    batch = list(islice(obj_iter, size))
-    if not batch:
-      break
-    batches.append(batch)
-  
-  return batches
-
-
-############################## Clean thinking part ############################
-
-
-import re
-
-
-def extract_think_and_answer(text: str) -> tuple[Optional[str], str]:
-  """
-  Separates a string into two parts: the content within <think>...</think> tags
-  and the remaining text (answer part).
-
-  Args:
-    text: The input string potentially containing <think>...</think> blocks.
-
-  Returns:
-    A tuple containing (thinking_part, answer_part).
-    If no <think> tags are found, thinking_part will be an empty string.
-  """
-  think_match = re.search(pattern=r'<think>(.*?)</think>',
-                          string=text,
-                          flags=re.DOTALL | re.IGNORECASE)
-
-  thinking_part = ""
-  answer_part = text
-
-  if think_match:
-    thinking_part = think_match.group(1).strip()
-    answer_part = re.sub(pattern=r'<think>.*?</think>',
-                         repl='',
-                         string=text,
-                         flags=re.DOTALL | re.IGNORECASE).strip()
-    return thinking_part, answer_part
-  return None, text
-
-
-############################## Ensure path exists #############################
-
-
-def ensure_path(path_str: str):
-  """
-  Crée le répertoire parent si le chemin est un fichier, ou le répertoire
-  lui-même.
-  """
-  from pathlib import Path
-  path = Path(path_str)
-  
-  # Si le chemin se termine par '/' ou n'a pas d'extension, c'est un dossier
-  if path_str.endswith('/') or not path.suffix:
-    path.mkdir(parents=True, exist_ok=True)
-  else:
-    # C'est un fichier, créer le répertoire parent
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-
-######################## Combine system and user prompt #######################
-
-
-def combine_prompts(system: Optional[str],
-                    user: str) -> str:
-  if not system:
-    system=""
-  return f"SYSTEM:\n {system}\n"+f"USER:\n {user}"
+  return "\n".join(f"- {source}" for source in sorted(sources))
