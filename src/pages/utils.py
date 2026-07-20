@@ -83,3 +83,38 @@ def list_ollama_models(base_url = None) -> list:
   except Exception as e:
     print(f"Error listing models: {e}")
     return []
+############################# Validate external ChromaDB #############################
+
+
+def validate_external_chroma(path: str, expected_dim: int = 768,
+                             collection: str = "document_database") -> tuple[bool, str]:
+    """Check a folder is a valid, compatible qmix ChromaDB store.
+
+    Returns (is_valid, message).
+    """
+    from pathlib import Path
+
+    p = Path(path.strip('"').strip())
+    if not p.is_dir():
+        return False, "That path is not a folder."
+    if not (p / "chroma.sqlite3").exists():
+        return False, "Not a ChromaDB store (no chroma.sqlite3 found in that folder)."
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(p.resolve()))
+        col = client.get_collection(name=collection)
+        sample = col.get(limit=1, include=["embeddings"])
+        embs = sample.get("embeddings")
+        if embs is None or len(embs) == 0:
+            return False, "The database has no embedded chunks to import."
+        dim = len(embs[0])
+        if dim != expected_dim:
+            return False, (
+                f"Incompatible embeddings: this database uses {dim}-dimensional "
+                f"vectors, but this project uses {expected_dim}. The retriever "
+                f"would not work with it."
+            )
+        count = col.count()
+    except Exception as e:
+        return False, f"Could not open as a ChromaDB database: {e}"
+    return True, f"Valid and compatible database ({count} chunks found)."

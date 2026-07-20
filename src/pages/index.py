@@ -208,6 +208,59 @@ if uploaded_files is not None and len(uploaded_files) > 0:
   if uploadButton:
     _process_files(uploaded_files, selected_clearance)
 
+
+############################## Import external ChromaDB ##############################
+
+st.divider()
+st.markdown("### Import an existing database")
+st.caption(
+    "Point to an existing ChromaDB folder (the folder containing chroma.sqlite3). "
+    "Its documents will be added to HOMER at the clearance level you choose."
+)
+
+db_path = st.text_input(
+    "ChromaDB folder path",
+    placeholder=r"C:\path\to\chroma_data",
+    key="externalDbPath",
+)
+
+import_clearances = [
+    lvl for lvl in _CLEARANCE_LEVELS
+    if _CLEARANCE_LEVELS[lvl] <= _CLEARANCE_LEVELS[user_clearance]
+]
+import_clearance = st.segmented_control(
+    "Import at clearance level",
+    options=import_clearances,
+    default=import_clearances[-1],
+    format_func=lambda x: x.replace("_", " "),
+    key="importClearance",
+)
+
+if st.button("Validate & import database", type="primary",
+             disabled=not db_path or not import_clearance):
+    from pages.utils import validate_external_chroma
+    from core.qmix_integration import import_external_store
+
+    ok, message = validate_external_chroma(db_path)
+    if not ok:
+        st.error(message)
+    else:
+        st.success(message)
+        with st.spinner("Importing documents..."):
+            try:
+                result = import_external_store(
+                    source_chroma_path=db_path.strip('"').strip(),
+                    config=st.session_state.baseConfig,
+                    target_clearance=import_clearance,
+                )
+                st.success(
+                    f"Imported {result['chunks_imported']} chunks into: "
+                    f"{', '.join(l.replace('_', ' ') for l in result['levels'])}."
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
 st.divider()
 
 # Display existing documents using st.status
@@ -222,10 +275,10 @@ for clearance, files in list_documents(user_clearance, st.session_state.baseConf
         col1, col2 = st.columns([0.9, 0.1])
 
         with col1:
-          st.markdown(f"📄 {Path(file).stem}")
+          st.markdown(f" {Path(file).stem}")
 
         with col2:
-          if st.button("🗑️", key=f"del_{clearance}_{file}"):
+          if st.button("trash", key=f"del_{clearance}_{file}"):
             try:
               delete_document(source_name=file, config=st.session_state.baseConfig)
               st.rerun()

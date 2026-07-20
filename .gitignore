@@ -2,6 +2,7 @@
 tests/
 graph.ipynb
 user_data/
+.vs
 
 .ipynb_checkpoints/
 
